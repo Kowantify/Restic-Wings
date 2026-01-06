@@ -24,14 +24,14 @@ jobs:
           chmod 755 dist/wings_linux_arm64
       - name: Create release branch
         env:
-          REF: ${{ github.ref }}
+          VERSION: ${{ github.ref_name }}
         run: |
-          BRANCH=release/${{ github.ref_name }}
+          BRANCH=release/${{ env.VERSION }}
           git config --local user.email "ci@pterodactyl.io"
           git config --local user.name "Pterodactyl CI"
           git checkout -b $BRANCH
           git push -u origin $BRANCH
-          sed -i "s/var Version = \".*\"/var Version = \"${{ github.ref_name }}\"/" system/const.go
+          sed -i "s/var Version = \".*\"/var Version = \"${VERSION:1}\"/" system/const.go
           git add system/const.go
           git commit -m "ci(release): bump version"
           git push
