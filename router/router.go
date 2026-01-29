@@ -1,14 +1,16 @@
 package router
 
 import (
-	"emperror.dev/errors"
-	"github.com/apex/log"
-	"github.com/gin-gonic/gin"
+"emperror.dev/errors"
+"github.com/apex/log"
+"github.com/gin-gonic/gin"
 
-	"github.com/pterodactyl/wings/config"
-	"github.com/pterodactyl/wings/remote"
-	"github.com/pterodactyl/wings/router/middleware"
-	wserver "github.com/pterodactyl/wings/server"
+"github.com/pterodactyl/wings/config"
+"github.com/pterodactyl/wings/remote"
+"github.com/pterodactyl/wings/router/middleware"
+wserver "github.com/pterodactyl/wings/server"
+
+restic "github.com/pterodactyl/wings/internal/api/restic"
 )
 
 // Configure configures the routing infrastructure for this daemon instance.
@@ -85,6 +87,10 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 		server.POST("/transfer", postServerTransfer)
 		server.DELETE("/transfer", deleteServerTransfer)
 
+		// Restic backup endpoints
+		server.POST("/backups/restic", restic.CreateServerResticBackup)
+		server.GET("/backups/restic", restic.ListServerResticBackups)
+
 		files := server.Group("/files")
 		{
 			files.GET("/contents", getServerFileContents)
@@ -106,8 +112,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 		backup := server.Group("/backup")
 		{
 			backup.POST("", postServerBackup)
-			backup.POST("/:backup/restore", postServerRestoreBackup)
-			backup.DELETE("/:backup", deleteServerBackup)
+			backup.POST(":/backup/restore", postServerRestoreBackup)
+			backup.DELETE(":/backup", deleteServerBackup)
 		}
 	}
 
