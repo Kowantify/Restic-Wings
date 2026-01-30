@@ -29,24 +29,33 @@ func DownloadServerResticBackup(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
         return
     }
-    // Use restic restore to extract the backup to tempDir/backupId/
-    restoreTarget := filepath.Join(tempDir, serverId+"-"+backupId)
-    if err := os.MkdirAll(restoreTarget, 0700); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create restore dir", "details": err.Error()})
-        return
-    }
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    restoreCmd := exec.Command("restic", "-r", repo, "restore", backupId, "--target", restoreTarget)
-    restoreCmd.Env = env
-    if err := restoreCmd.Run(); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": err.Error()})
-        return
-    }
-    // Tar only the restored directory for this backup
+    // Use restic dump to create a tar.gz of the backup root
     tarFile := filepath.Join(tempDir, serverId+"-"+backupId+".tar.gz")
-    tarCmd := exec.Command("tar", "-czf", tarFile, "-C", restoreTarget, ".")
-    if err := tarCmd.Run(); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tar archive", "details": err.Error()})
+    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, "/")
+    gzipCmd := exec.Command("gzip")
+    dumpCmd.Env = env
+    dumpCmd.Stdout, _ = gzipCmd.StdinPipe()
+    outFile, err := os.OpenFile(tarFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tar file", "details": err.Error()})
+        return
+    }
+    defer outFile.Close()
+    gzipCmd.Stdout = outFile
+    if err := dumpCmd.Start(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start restic dump", "details": err.Error()})
+        return
+    }
+    if err := gzipCmd.Start(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start gzip", "details": err.Error()})
+        return
+    }
+    if err := dumpCmd.Wait(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic dump failed", "details": err.Error()})
+        return
+    }
+    if err := gzipCmd.Wait(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "gzip failed", "details": err.Error()})
         return
     }
     f, err := os.Open(tarFile)
