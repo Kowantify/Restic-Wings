@@ -2,7 +2,6 @@ package restic
 
 import (
     "fmt"
-    "io"
     "net/http"
     "os"
     "os/exec"
