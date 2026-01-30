@@ -34,7 +34,7 @@ func DownloadServerResticBackup(c *gin.Context) {
     // Clean up any leftover file from previous failed downloads
     os.Remove(tarFile)
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, serverId)
+    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, "/")
     gzipCmd := exec.Command("gzip")
     dumpCmd.Env = env
     dumpCmd.Stdout, _ = gzipCmd.StdinPipe()
