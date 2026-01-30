@@ -16,13 +16,14 @@ func DownloadServerResticBackup(c *gin.Context) {
     serverId := c.Param("server")
     backupId := c.Param("backupId")
     encryptionKey := c.Query("encryption_key")
-    if serverId == "" || backupId == "" || encryptionKey == "" {
+    ownerUsername := c.Query("owner_username")
+    if serverId == "" || backupId == "" || encryptionKey == "" || ownerUsername == "" {
         c.JSON(http.StatusBadRequest, gin.H{"error": "missing required parameters"})
         return
     }
 
     // Compose repo and temp file path
-    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", serverId)
+    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
