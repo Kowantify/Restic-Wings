@@ -31,8 +31,10 @@ func DownloadServerResticBackup(c *gin.Context) {
     }
     // Use restic dump to create a tar.gz of the backup root
     tarFile := filepath.Join(tempDir, serverId+"-"+backupId+".tar.gz")
+    // Clean up any leftover file from previous failed downloads
+    os.Remove(tarFile)
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, "/")
+    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, serverId)
     gzipCmd := exec.Command("gzip")
     dumpCmd.Env = env
     dumpCmd.Stdout, _ = gzipCmd.StdinPipe()
