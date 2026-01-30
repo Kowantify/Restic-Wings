@@ -2,6 +2,7 @@ package restic
 
 import (
     "fmt"
+    "io"
     "net/http"
     "os"
     "os/exec"
@@ -73,5 +74,6 @@ func DownloadServerResticBackup(c *gin.Context) {
     c.Header("Content-Type", "application/gzip")
     c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=backup-%s.tar.gz", backupId))
     c.Header("X-Accel-Buffering", "no")
-    http.ServeContent(c.Writer, c.Request, tarFile, time.Now(), f)
+    c.Status(200)
+    io.Copy(c.Writer, f)
 }
