@@ -87,9 +87,10 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 		server.POST("/transfer", postServerTransfer)
 		server.DELETE("/transfer", deleteServerTransfer)
 
-		// Restic backup endpoints
-		server.POST("/backups/restic", restic.CreateServerResticBackup)
-		server.GET("/backups/restic", restic.ListServerResticBackups)
+			   // Restic backup endpoints
+			   server.POST("/backups/restic", restic.CreateServerResticBackup)
+			   server.GET("/backups/restic", restic.ListServerResticBackups)
+			   server.GET("/backups/restic/:backupId/download", restic.DownloadServerResticBackup)
 
 		files := server.Group("/files")
 		{
