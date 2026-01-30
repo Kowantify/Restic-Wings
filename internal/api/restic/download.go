@@ -28,39 +28,38 @@ func DownloadServerResticBackup(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
         return
     }
-    tempFile := filepath.Join(tempDir, backupId+".tar.gz")
-
-    // Use restic to dump the backup to a tar.gz file
-    // This assumes the backup is a snapshot and can be dumped as a tar archive
+    // Use restic restore to extract the backup to tempDir/backupId/
+    restoreTarget := filepath.Join(tempDir, serverId+"-"+backupId)
+    if err := os.MkdirAll(restoreTarget, 0700); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create restore dir", "details": err.Error()})
+        return
+    }
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, "/", "--archive")
-    outFile, err := os.OpenFile(tempFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file", "details": err.Error()})
+    restoreCmd := exec.Command("restic", "-r", repo, "restore", backupId, "--target", restoreTarget)
+    restoreCmd.Env = env
+    if err := restoreCmd.Run(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": err.Error()})
         return
     }
-    defer outFile.Close()
-    dumpCmd.Env = env
-    dumpCmd.Stdout = outFile
-    if err := dumpCmd.Run(); err != nil {
-        os.Remove(tempFile)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic dump failed", "details": err.Error()})
+    // Tar only the restored directory for this backup
+    tarFile := filepath.Join(tempDir, serverId+"-"+backupId+".tar.gz")
+    tarCmd := exec.Command("tar", "-czf", tarFile, "-C", restoreTarget, ".")
+    if err := tarCmd.Run(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tar archive", "details": err.Error()})
         return
     }
-
-    // Stream the file to the user
-    f, err := os.Open(tempFile)
+    f, err := os.Open(tarFile)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open temp file", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file", "details": err.Error()})
         return
     }
     defer func() {
         f.Close()
-        os.Remove(tempFile)
+        os.RemoveAll(restoreTarget)
+        os.Remove(tarFile)
     }()
-
     c.Header("Content-Type", "application/gzip")
     c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=backup-%s.tar.gz", backupId))
     c.Header("X-Accel-Buffering", "no")
-    http.ServeContent(c.Writer, c.Request, tempFile, time.Now(), f)
+    http.ServeContent(c.Writer, c.Request, tarFile, time.Now(), f)
 }
