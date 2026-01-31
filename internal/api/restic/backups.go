@@ -6,6 +6,7 @@ import (
     "net/http"
     "os"
     "os/exec"
+    "path/filepath"
     "sort"
     "strconv"
     "strings"
@@ -53,6 +54,7 @@ func CreateServerResticBackup(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir", "details": err.Error()})
         return
     }
+    ensureResticKeyFile(repo, encryptionKey)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
 
@@ -199,6 +201,7 @@ func ListServerResticBackups(c *gin.Context) {
         repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
     }
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
+    ensureResticKeyFile(repo, encryptionKey)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
 
@@ -407,6 +410,16 @@ func ListServerResticBackups(c *gin.Context) {
         "limit":       limit,
         "total":       len(filteredAll),
     })
+}
+
+func ensureResticKeyFile(repo string, encryptionKey string) {
+    if repo == "" || encryptionKey == "" {
+        return
+    }
+    keyPath := filepath.Join(repo, ".restic-key")
+    if err := os.WriteFile(keyPath, []byte(encryptionKey+"\n"), 0600); err != nil {
+        return
+    }
 }
 
 // GET /api/servers/:server/backups/restic/stats
