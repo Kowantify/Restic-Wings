@@ -387,6 +387,10 @@ func GetServerResticStats(c *gin.Context) {
         if n, ok := extractNumber(v); ok {
             response["total_uncompressed_size"] = n
         }
+    } else if v, ok := stats["total_file_size"]; ok {
+        if n, ok := extractNumber(v); ok {
+            response["total_uncompressed_size"] = n
+        }
     }
 
     if v, ok := stats["snapshots_count"]; ok {
