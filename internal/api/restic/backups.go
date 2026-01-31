@@ -290,3 +290,67 @@ func ListServerResticBackups(c *gin.Context) {
         "total":       len(filteredAll),
     })
 }
+
+// GET /api/servers/:server/backups/restic/stats
+func GetServerResticStats(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    var ownerUsername, encryptionKey string
+    if v, ok := c.GetQuery("owner_username"); ok && v != "" {
+        ownerUsername = v
+    } else {
+        ownerUsername = c.Query("owner_username")
+    }
+    if v, ok := c.GetQuery("encryption_key"); ok && v != "" {
+        encryptionKey = v
+    } else {
+        encryptionKey = c.Query("encryption_key")
+    }
+    if encryptionKey == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing encryption key"})
+        return
+    }
+
+    repoDir := serverId
+    if ownerUsername != "" {
+        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
+    }
+    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
+
+    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+
+    if _, err := os.Stat(repo + "/config"); os.IsNotExist(err) {
+        if err := os.MkdirAll(repo, 0755); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir", "details": err.Error()})
+            return
+        }
+        initCmd := exec.Command("restic", "-r", repo, "init")
+        initCmd.Env = env
+        if out, err := initCmd.CombinedOutput(); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out)})
+            return
+        }
+        c.JSON(http.StatusOK, gin.H{"total_size": 0})
+        return
+    }
+
+    statsCmd := exec.Command("restic", "-r", repo, "stats", "--json")
+    statsCmd.Env = env
+    out, err := statsCmd.CombinedOutput()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get stats", "output": string(out)})
+        return
+    }
+
+    var stats map[string]interface{}
+    if err := json.Unmarshal(out, &stats); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse restic output", "output": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, stats)
+}
