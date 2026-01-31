@@ -37,12 +37,16 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
         return
     }
-    // Use restic dump to create a tar.gz of the backup root
-    tarFile := filepath.Join(tempDir, serverId+"-"+backupId+".tar.gz")
+    // Use restic dump --archive to create a tar.gz of the backup root
+    shortId := backupId
+    if len(shortId) > 8 {
+        shortId = shortId[:8]
+    }
+    tarFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.gz")
     // Clean up any leftover file from previous failed downloads
-    os.Remove(tarFile)
+    _ = os.Remove(tarFile)
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", backupId, "/")
+    dumpCmd := exec.Command("restic", "-r", repo, "dump", "--archive", backupId, "/")
     gzipCmd := exec.Command("gzip")
     dumpCmd.Env = env
     dumpCmd.Stdout, _ = gzipCmd.StdinPipe()
@@ -74,12 +78,12 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file", "details": err.Error()})
         return
     }
-    defer func() {
-        f.Close()
-        os.Remove(tarFile)
-    }()
+    defer f.Close()
+    if st, err := f.Stat(); err == nil {
+        c.Header("Content-Length", fmt.Sprintf("%d", st.Size()))
+    }
     c.Header("Content-Type", "application/gzip")
-    c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=backup-%s.tar.gz", backupId))
+    c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=backup-%s.tar.gz", shortId))
     c.Header("X-Accel-Buffering", "no")
     c.Status(200)
     io.Copy(c.Writer, f)
