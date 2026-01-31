@@ -9,6 +9,7 @@ import (
     "path/filepath"
 
     "github.com/gin-gonic/gin"
+    "github.com/pterodactyl/wings/server"
 )
 
 // GET /api/servers/:server/backups/restic/:backupId/download
@@ -22,6 +23,13 @@ func DownloadServerResticBackup(c *gin.Context) {
         return
     }
 
+    s := c.MustGet("server").(*server.Server)
+    DownloadServerResticBackupFromToken(c, s, backupId, encryptionKey, ownerUsername)
+}
+
+// DownloadServerResticBackupFromToken streams a Restic backup as tar.gz
+func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backupId, encryptionKey, ownerUsername string) {
+    serverId := s.ID()
     // Compose repo and temp file path
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
     tempDir := "/var/lib/pterodactyl/restic/temp"
