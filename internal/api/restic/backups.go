@@ -176,6 +176,12 @@ func ListServerResticBackups(c *gin.Context) {
             for _, snap := range lockedSnapshots {
                 if id, ok := snap["id"].(string); ok && id != "" {
                     lockedIDs[id] = true
+                    if len(id) >= 8 {
+                        lockedIDs[id[:8]] = true
+                    }
+                }
+                if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
+                    lockedIDs[shortID] = true
                 }
             }
         }
@@ -257,7 +263,13 @@ func ListServerResticBackups(c *gin.Context) {
 
     items := make([]snapshotItem, 0, len(snapshots))
     for _, snap := range snapshots {
-        if id, ok := snap["id"].(string); ok && lockedIDs[id] {
+        id, _ := snap["id"].(string)
+        shortID, _ := snap["short_id"].(string)
+        if id != "" && len(id) >= 8 && shortID == "" {
+            shortID = id[:8]
+        }
+
+        if (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID]) {
             if tags, ok := snap["tags"].([]interface{}); ok {
                 hasLocked := false
                 for _, t := range tags {
