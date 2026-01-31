@@ -109,9 +109,8 @@ func getDownloadResticBackup(c *gin.Context) {
 		return
 	}
 
-	// Now, run restic dump to stream the backup
-	// Similar to the existing download.go, but without auth since it's token-based
-	restic.DownloadServerResticBackupFromToken(c, s, token.BackupId, token.EncryptionKey, token.OwnerUsername)
+	// Stream a prepared Restic archive (no secrets in token).
+	restic.DownloadServerResticBackupFromToken(c, s, token.BackupId)
 }
 
 // Handles downloading a specific file for a server.
