@@ -63,10 +63,14 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
     gzFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.gz")
     f, err := os.Open(gzFile)
     if err != nil {
+        _ = os.Remove(gzFile)
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file", "details": err.Error()})
         return
     }
-    defer f.Close()
+    defer func() {
+        f.Close()
+        _ = os.Remove(gzFile)
+    }()
     if st, err := f.Stat(); err == nil {
         if st.Size() == 0 {
             c.JSON(http.StatusInternalServerError, gin.H{"error": "backup archive is empty"})
