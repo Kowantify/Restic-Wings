@@ -1,12 +1,10 @@
 package restic
 
 import (
-    "bytes"
     "fmt"
     "io"
     "net/http"
     "os"
-    "os/exec"
     "path/filepath"
 
     "github.com/gin-gonic/gin"
@@ -25,11 +23,20 @@ func DownloadServerResticBackup(c *gin.Context) {
     }
 
     s := c.MustGet("server").(*server.Server)
-    DownloadServerResticBackupFromToken(c, s, backupId, encryptionKey, ownerUsername)
+    if err := PrepareServerResticBackup(c, s, backupId, encryptionKey, ownerUsername); err != nil {
+        return
+    }
+    StreamPreparedResticBackup(c, s, backupId)
 }
 
-// DownloadServerResticBackupFromToken streams a Restic backup as tar.gz
-func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backupId, encryptionKey, ownerUsername string) {
+// DownloadServerResticBackupFromToken streams a Restic backup as tar.gz.
+// Assumes the archive has already been prepared using PrepareServerResticBackup.
+func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backupId string) {
+    StreamPreparedResticBackup(c, s, backupId)
+}
+
+// StreamPreparedResticBackup streams a prepared Restic archive from temp storage.
+func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId string) {
     serverId := s.ID()
     if backupId == "" {
         backupId = c.Query("backup_id")
@@ -44,61 +51,16 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
         c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup_id"})
         return
     }
-    // Compose repo and temp file path
-    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
         return
     }
-    // Use restic dump --archive to create a tar.gz of the backup root
     shortId := backupId
     if len(shortId) > 8 {
         shortId = shortId[:8]
     }
-    tarFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar")
-    gzFile := tarFile + ".gz"
-    // Clean up any leftover file from previous failed downloads
-    _ = os.Remove(tarFile)
-    _ = os.Remove(gzFile)
-
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    restoreDir := filepath.Join(tempDir, serverId+"-"+shortId+"-restore")
-    _ = os.RemoveAll(restoreDir)
-
-    restoreCmd := exec.Command("restic", "-r", repo, "restore", backupId, "--target", restoreDir)
-    restoreCmd.Env = env
-
-    var restoreErr bytes.Buffer
-    restoreCmd.Stderr = &restoreErr
-    if err := restoreCmd.Run(); err != nil {
-        _ = os.RemoveAll(restoreDir)
-        details := restoreErr.String()
-        if details == "" {
-            details = err.Error()
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": details})
-        return
-    }
-
-    volumeSubdir := filepath.Join(restoreDir, "var/lib/pterodactyl/volumes", serverId)
-    tarBase := restoreDir
-    if st, err := os.Stat(volumeSubdir); err == nil && st.IsDir() {
-        tarBase = volumeSubdir
-    }
-    tarCmd := exec.Command("tar", "-czf", gzFile, "-C", tarBase, ".")
-    var tarErr bytes.Buffer
-    tarCmd.Stderr = &tarErr
-    if err := tarCmd.Run(); err != nil {
-        details := tarErr.String()
-        if details == "" {
-            details = err.Error()
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "tar failed", "details": details})
-        return
-    }
-    _ = os.RemoveAll(restoreDir)
-
+    gzFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.gz")
     f, err := os.Open(gzFile)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file", "details": err.Error()})
