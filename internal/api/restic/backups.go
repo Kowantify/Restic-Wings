@@ -706,3 +706,29 @@ func DeleteServerResticRepo(c *gin.Context) {
 
     c.JSON(http.StatusOK, gin.H{"message": "repo deleted", "deleted": deleted})
 }
+
+// GET /api/servers/:server/backups/restic/repo/exists
+func CheckServerResticRepo(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    base := "/var/lib/pterodactyl/restic/"
+    entries, err := os.ReadDir(base)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir", "details": err.Error()})
+        return
+    }
+
+    count := 0
+    for _, entry := range entries {
+        name := entry.Name()
+        if name == serverId || strings.HasPrefix(name, serverId+"+") {
+            count++
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{"exists": count > 0, "count": count})
+}
