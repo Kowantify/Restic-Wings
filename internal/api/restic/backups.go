@@ -375,58 +375,24 @@ func GetServerResticStats(c *gin.Context) {
         return 0, false
     }
 
-    var repoSize float64
-    var repoSizeOk bool
-    for _, key := range []string{"total_size", "repository_size", "total_blob_size"} {
-        if v, ok := stats[key]; ok {
-            if n, ok := extractNumber(v); ok {
-                repoSize = n
-                repoSizeOk = true
-                break
-            }
-        }
-    }
-
-    var totalFileCount float64
-    var totalFileCountOk bool
-    for _, key := range []string{"total_file_count"} {
-        if v, ok := stats[key]; ok {
-            if n, ok := extractNumber(v); ok {
-                totalFileCount = n
-                totalFileCountOk = true
-                break
-            }
-        }
-    }
-
-    var logicalSize float64
-    var logicalSizeOk bool
-    for _, key := range []string{"total_uncompressed_size", "total_file_size"} {
-        if v, ok := stats[key]; ok {
-            if n, ok := extractNumber(v); ok {
-                logicalSize = n
-                logicalSizeOk = true
-                break
-            }
-        }
-    }
-
-    var ratio float64
-    ratioOk := false
-    if repoSizeOk && logicalSizeOk && repoSize > 0 {
-        ratio = logicalSize / repoSize
-        ratioOk = true
-    }
-
     response := gin.H{}
-    if repoSizeOk {
-        response["repo_size"] = repoSize
+
+    if v, ok := stats["total_size"]; ok {
+        if n, ok := extractNumber(v); ok {
+            response["total_size"] = n
+        }
     }
-    if totalFileCountOk {
-        response["total_file_count"] = totalFileCount
+
+    if v, ok := stats["total_uncompressed_size"]; ok {
+        if n, ok := extractNumber(v); ok {
+            response["total_uncompressed_size"] = n
+        }
     }
-    if ratioOk {
-        response["compression_ratio"] = ratio
+
+    if v, ok := stats["snapshots_count"]; ok {
+        if n, ok := extractNumber(v); ok {
+            response["snapshots_count"] = n
+        }
     }
 
     c.JSON(http.StatusOK, response)
