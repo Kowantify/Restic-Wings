@@ -499,7 +499,7 @@ func LockServerResticBackup(c *gin.Context) {
         return
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "locked"})
+    c.JSON(http.StatusOK, gin.H{"message": "locked", "locked": true})
 }
 
 // POST /api/servers/:server/backups/restic/:backupId/unlock
@@ -524,5 +524,5 @@ func UnlockServerResticBackup(c *gin.Context) {
         return
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "unlocked"})
+    c.JSON(http.StatusOK, gin.H{"message": "unlocked", "locked": false})
 }
