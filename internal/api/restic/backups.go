@@ -352,5 +352,37 @@ func GetServerResticStats(c *gin.Context) {
         return
     }
 
+    extractNumber := func(val interface{}) (float64, bool) {
+        switch t := val.(type) {
+        case float64:
+            return t, true
+        case float32:
+            return float64(t), true
+        case int:
+            return float64(t), true
+        case int64:
+            return float64(t), true
+        case json.Number:
+            if f, err := t.Float64(); err == nil {
+                return f, true
+            }
+        case map[string]interface{}:
+            if v, ok := t["bytes"]; ok {
+                return extractNumber(v)
+            }
+        }
+        return 0, false
+    }
+
+    keys := []string{"total_size", "total_file_size", "total_uncompressed_size", "total_blob_size", "repository_size"}
+    for _, key := range keys {
+        if v, ok := stats[key]; ok {
+            if n, ok := extractNumber(v); ok {
+                stats["repo_size"] = n
+                break
+            }
+        }
+    }
+
     c.JSON(http.StatusOK, stats)
 }
