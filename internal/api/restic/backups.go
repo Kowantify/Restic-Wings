@@ -111,6 +111,23 @@ func ListServerResticBackups(c *gin.Context) {
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err != nil {
+        // If repo missing/uninitialized, initialize and return empty list
+        if _, statErr := os.Stat(repo + "/config"); os.IsNotExist(statErr) {
+            initCmd := exec.Command("restic", "-r", repo, "init")
+            initCmd.Env = env
+            if initOut, initErr := initCmd.CombinedOutput(); initErr == nil {
+                c.JSON(http.StatusOK, gin.H{
+                    "backups":     []map[string]interface{}{},
+                    "next_cursor": "",
+                    "limit":       0,
+                    "total":       0,
+                })
+                return
+            } else {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(initOut)})
+                return
+            }
+        }
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list backups", "output": string(out)})
         return
     }
