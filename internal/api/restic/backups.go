@@ -166,6 +166,21 @@ func ListServerResticBackups(c *gin.Context) {
         return
     }
 
+    // Detect locked snapshots by tag
+    lockedIDs := map[string]bool{}
+    lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+    lockCmd.Env = env
+    if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
+        var lockedSnapshots []map[string]interface{}
+        if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
+            for _, snap := range lockedSnapshots {
+                if id, ok := snap["id"].(string); ok && id != "" {
+                    lockedIDs[id] = true
+                }
+            }
+        }
+    }
+
     // Pagination + filtering
     limit := 25
     if rawLimit := c.Query("limit"); rawLimit != "" {
@@ -242,6 +257,22 @@ func ListServerResticBackups(c *gin.Context) {
 
     items := make([]snapshotItem, 0, len(snapshots))
     for _, snap := range snapshots {
+        if id, ok := snap["id"].(string); ok && lockedIDs[id] {
+            if tags, ok := snap["tags"].([]interface{}); ok {
+                hasLocked := false
+                for _, t := range tags {
+                    if s, ok := t.(string); ok && s == "locked" {
+                        hasLocked = true
+                        break
+                    }
+                }
+                if !hasLocked {
+                    snap["tags"] = append(tags, "locked")
+                }
+            } else {
+                snap["tags"] = []string{"locked"}
+            }
+        }
         items = append(items, snapshotItem{Raw: snap, Time: parseSnapshotTime(snap["time"])})
     }
 
