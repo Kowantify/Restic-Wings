@@ -63,43 +63,36 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
     _ = os.Remove(gzFile)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    volumePath := fmt.Sprintf("/var/lib/pterodactyl/volumes/%s", serverId)
+    restoreDir := filepath.Join(tempDir, serverId+"-"+shortId+"-restore")
+    _ = os.RemoveAll(restoreDir)
 
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", "--archive", backupId, volumePath)
-    dumpCmd.Env = env
+    restoreCmd := exec.Command("restic", "-r", repo, "restore", backupId, "--target", restoreDir)
+    restoreCmd.Env = env
 
-    var dumpErr bytes.Buffer
-    dumpCmd.Stderr = &dumpErr
-
-    outFile, err := os.OpenFile(tarFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create tar file", "details": err.Error()})
-        return
-    }
-    dumpCmd.Stdout = outFile
-    if err := dumpCmd.Run(); err != nil {
-        _ = outFile.Close()
-        _ = os.Remove(tarFile)
-        details := dumpErr.String()
+    var restoreErr bytes.Buffer
+    restoreCmd.Stderr = &restoreErr
+    if err := restoreCmd.Run(); err != nil {
+        _ = os.RemoveAll(restoreDir)
+        details := restoreErr.String()
         if details == "" {
             details = err.Error()
         }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic dump failed", "details": details})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": details})
         return
     }
-    _ = outFile.Close()
 
-    gzipCmd := exec.Command("gzip", "-f", tarFile)
-    var gzipErr bytes.Buffer
-    gzipCmd.Stderr = &gzipErr
-    if err := gzipCmd.Run(); err != nil {
-        details := gzipErr.String()
+    tarCmd := exec.Command("tar", "-czf", gzFile, "-C", restoreDir, ".")
+    var tarErr bytes.Buffer
+    tarCmd.Stderr = &tarErr
+    if err := tarCmd.Run(); err != nil {
+        details := tarErr.String()
         if details == "" {
             details = err.Error()
         }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "gzip failed", "details": details})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "tar failed", "details": details})
         return
     }
+    _ = os.RemoveAll(restoreDir)
 
     f, err := os.Open(gzFile)
     if err != nil {
