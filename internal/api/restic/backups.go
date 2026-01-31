@@ -205,6 +205,7 @@ func ListServerResticBackups(c *gin.Context) {
         return items[i].Time.After(items[j].Time)
     })
 
+    filteredAll := make([]snapshotItem, 0, len(items))
     filtered := make([]snapshotItem, 0, len(items))
     for _, item := range items {
         if sinceOk && !item.Time.IsZero() && item.Time.Before(sinceTime) {
@@ -213,6 +214,7 @@ func ListServerResticBackups(c *gin.Context) {
         if untilOk && !item.Time.IsZero() && item.Time.After(untilTime) {
             continue
         }
+        filteredAll = append(filteredAll, item)
         if cursorOk && !item.Time.IsZero() && (item.Time.Equal(cursorTime) || item.Time.After(cursorTime)) {
             continue
         }
@@ -241,5 +243,6 @@ func ListServerResticBackups(c *gin.Context) {
         "backups":     page,
         "next_cursor": nextCursor,
         "limit":       limit,
+        "total":       len(filteredAll),
     })
 }
