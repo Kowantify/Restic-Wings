@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/pterodactyl/wings/internal/api/restic"
 	"github.com/pterodactyl/wings/router/middleware"
 	"github.com/pterodactyl/wings/router/tokens"
 	"github.com/pterodactyl/wings/server/backup"
@@ -94,7 +95,7 @@ func getDownloadResticBackup(c *gin.Context) {
 
 	// Now, run restic dump to stream the backup
 	// Similar to the existing download.go, but without auth since it's token-based
-	DownloadServerResticBackupFromToken(c, s, token.BackupId, token.EncryptionKey, token.OwnerUsername)
+	restic.DownloadServerResticBackupFromToken(c, s, token.BackupId, token.EncryptionKey, token.OwnerUsername)
 }
 
 // Handles downloading a specific file for a server.
