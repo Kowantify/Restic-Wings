@@ -157,7 +157,10 @@ func ListServerResticBackups(c *gin.Context) {
         if t, err := time.Parse(time.RFC3339Nano, sinceStr); err == nil {
             sinceTime = t
             sinceOk = true
-        } else if t, err := time.Parse("2006-01-02", sinceStr); err == nil {
+        } else if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+            sinceTime = t
+            sinceOk = true
+        } else if t, err := time.ParseInLocation("2006-01-02", sinceStr, time.Local); err == nil {
             sinceTime = t
             sinceOk = true
         }
@@ -166,8 +169,11 @@ func ListServerResticBackups(c *gin.Context) {
         if t, err := time.Parse(time.RFC3339Nano, untilStr); err == nil {
             untilTime = t
             untilOk = true
-        } else if t, err := time.Parse("2006-01-02", untilStr); err == nil {
-            untilTime = t.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+        } else if t, err := time.Parse(time.RFC3339, untilStr); err == nil {
+            untilTime = t
+            untilOk = true
+        } else if t, err := time.ParseInLocation("2006-01-02", untilStr, time.Local); err == nil {
+            untilTime = t.Add(24*time.Hour - time.Nanosecond)
             untilOk = true
         }
     }
