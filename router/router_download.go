@@ -84,6 +84,16 @@ func getDownloadResticBackup(c *gin.Context) {
 		return
 	}
 
+	if token.BackupId == "" {
+		token.BackupId = c.Query("backup_id")
+	}
+	if token.BackupId == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			"error": "Missing backup_id in token or query.",
+		})
+		return
+	}
+
 	// Get the server using the UUID from the token.
 	s, ok := manager.Get(token.ServerUuid)
 	if !ok || !token.IsUniqueRequest() {
