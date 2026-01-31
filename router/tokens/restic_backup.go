@@ -9,8 +9,6 @@ type ResticBackupPayload struct {
 
     ServerUuid    string `json:"server_uuid"`
     BackupId      string `json:"backup_id"`
-    EncryptionKey string `json:"encryption_key"`
-    OwnerUsername string `json:"owner_username"`
     UniqueId      string `json:"unique_id"`
 }
 
