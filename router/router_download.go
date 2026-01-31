@@ -72,6 +72,31 @@ func getDownloadBackup(c *gin.Context) {
 	_, _ = bufio.NewReader(f).WriteTo(c.Writer)
 }
 
+// Handle a download request for a Restic backup.
+func getDownloadResticBackup(c *gin.Context) {
+	manager := middleware.ExtractManager(c)
+
+	// Get the payload from the token.
+	token := tokens.ResticBackupPayload{}
+	if err := tokens.ParseToken([]byte(c.Query("token")), &token); err != nil {
+		middleware.CaptureAndAbort(c, err)
+		return
+	}
+
+	// Get the server using the UUID from the token.
+	s, ok := manager.Get(token.ServerUuid)
+	if !ok || !token.IsUniqueRequest() {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+			"error": "The requested resource was not found on this server.",
+		})
+		return
+	}
+
+	// Now, run restic dump to stream the backup
+	// Similar to the existing download.go, but without auth since it's token-based
+	DownloadServerResticBackupFromToken(c, s, token.BackupId, token.EncryptionKey, token.OwnerUsername)
+}
+
 // Handles downloading a specific file for a server.
 func getDownloadFile(c *gin.Context) {
 	manager := middleware.ExtractManager(c)
