@@ -6,6 +6,9 @@ import (
     "net/http"
     "os"
     "os/exec"
+    "sort"
+    "strconv"
+    "time"
 
     "github.com/gin-gonic/gin"
 )
@@ -118,5 +121,119 @@ func ListServerResticBackups(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse restic output", "output": string(out)})
         return
     }
-    c.JSON(http.StatusOK, gin.H{"backups": snapshots})
+
+    // Pagination + filtering
+    limit := 25
+    if rawLimit := c.Query("limit"); rawLimit != "" {
+        if v, err := strconv.Atoi(rawLimit); err == nil && v > 0 {
+            if v > 100 {
+                v = 100
+            }
+            limit = v
+        }
+    }
+
+    parseSnapshotTime := func(val interface{}) time.Time {
+        s, _ := val.(string)
+        if s == "" {
+            return time.Time{}
+        }
+        if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+            return t
+        }
+        if t, err := time.Parse(time.RFC3339, s); err == nil {
+            return t
+        }
+        return time.Time{}
+    }
+
+    sinceStr := c.Query("since")
+    untilStr := c.Query("until")
+    var sinceTime time.Time
+    var untilTime time.Time
+    var sinceOk bool
+    var untilOk bool
+    if sinceStr != "" {
+        if t, err := time.Parse(time.RFC3339Nano, sinceStr); err == nil {
+            sinceTime = t
+            sinceOk = true
+        } else if t, err := time.Parse("2006-01-02", sinceStr); err == nil {
+            sinceTime = t
+            sinceOk = true
+        }
+    }
+    if untilStr != "" {
+        if t, err := time.Parse(time.RFC3339Nano, untilStr); err == nil {
+            untilTime = t
+            untilOk = true
+        } else if t, err := time.Parse("2006-01-02", untilStr); err == nil {
+            untilTime = t.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+            untilOk = true
+        }
+    }
+
+    cursorStr := c.Query("cursor")
+    var cursorTime time.Time
+    var cursorOk bool
+    if cursorStr != "" {
+        if t, err := time.Parse(time.RFC3339Nano, cursorStr); err == nil {
+            cursorTime = t
+            cursorOk = true
+        } else if t, err := time.Parse(time.RFC3339, cursorStr); err == nil {
+            cursorTime = t
+            cursorOk = true
+        }
+    }
+
+    type snapshotItem struct {
+        Raw  map[string]interface{}
+        Time time.Time
+    }
+
+    items := make([]snapshotItem, 0, len(snapshots))
+    for _, snap := range snapshots {
+        items = append(items, snapshotItem{Raw: snap, Time: parseSnapshotTime(snap["time"])})
+    }
+
+    sort.Slice(items, func(i, j int) bool {
+        return items[i].Time.After(items[j].Time)
+    })
+
+    filtered := make([]snapshotItem, 0, len(items))
+    for _, item := range items {
+        if sinceOk && !item.Time.IsZero() && item.Time.Before(sinceTime) {
+            continue
+        }
+        if untilOk && !item.Time.IsZero() && item.Time.After(untilTime) {
+            continue
+        }
+        if cursorOk && !item.Time.IsZero() && (item.Time.Equal(cursorTime) || item.Time.After(cursorTime)) {
+            continue
+        }
+        filtered = append(filtered, item)
+    }
+
+    page := make([]map[string]interface{}, 0, limit)
+    for i, item := range filtered {
+        if i >= limit {
+            break
+        }
+        page = append(page, item.Raw)
+    }
+
+    var nextCursor string
+    if len(filtered) > limit {
+        last := page[len(page)-1]
+        if last != nil {
+            if t, ok := last["time"].(string); ok {
+                nextCursor = t
+            }
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "backups":     page,
+        "next_cursor": nextCursor,
+        "limit":       limit,
+    })
 }
