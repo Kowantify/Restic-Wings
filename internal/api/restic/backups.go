@@ -65,7 +65,7 @@ func CreateServerResticBackup(c *gin.Context) {
         }
     }
 
-    // Prune oldest backup if maxBackups reached
+    // Prune oldest backup if maxBackups reached (keep locked snapshots)
     if maxBackups > 0 {
         countCmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
         countCmd.Env = env
@@ -78,7 +78,7 @@ func CreateServerResticBackup(c *gin.Context) {
                     if keepLast < 1 {
                         keepLast = 1
                     }
-                    pruneCmd := exec.Command("restic", "-r", repo, "forget", "--prune", "--keep-last", strconv.Itoa(keepLast))
+                    pruneCmd := exec.Command("restic", "-r", repo, "forget", "--prune", "--keep-last", strconv.Itoa(keepLast), "--keep-tag", "locked")
                     pruneCmd.Env = env
                     if out, err := pruneCmd.CombinedOutput(); err != nil {
                         c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
@@ -433,4 +433,96 @@ func GetServerResticStats(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, response)
+}
+
+func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        return "", nil, fmt.Errorf("missing server id")
+    }
+
+    var ownerUsername, encryptionKey string
+    if v, ok := c.GetPostForm("owner_username"); ok && v != "" {
+        ownerUsername = v
+    }
+    if v, ok := c.GetPostForm("encryption_key"); ok && v != "" {
+        encryptionKey = v
+    }
+
+    if ownerUsername == "" || encryptionKey == "" {
+        var body struct {
+            OwnerUsername string `json:"owner_username"`
+            EncryptionKey string `json:"encryption_key"`
+        }
+        if err := c.ShouldBindJSON(&body); err == nil {
+            if ownerUsername == "" {
+                ownerUsername = body.OwnerUsername
+            }
+            if encryptionKey == "" {
+                encryptionKey = body.EncryptionKey
+            }
+        }
+    }
+
+    if encryptionKey == "" {
+        return "", nil, fmt.Errorf("missing encryption key")
+    }
+
+    repoDir := serverId
+    if ownerUsername != "" {
+        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
+    }
+    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
+    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+    return repo, env, nil
+}
+
+// POST /api/servers/:server/backups/restic/:backupId/lock
+func LockServerResticBackup(c *gin.Context) {
+    backupId := c.Param("backupId")
+    if backupId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup id"})
+        return
+    }
+
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    tagCmd := exec.Command("restic", "-r", repo, "tag", "--add", "locked", backupId)
+    tagCmd.Env = env
+    out, err := tagCmd.CombinedOutput()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to lock backup", "output": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "locked"})
+}
+
+// POST /api/servers/:server/backups/restic/:backupId/unlock
+func UnlockServerResticBackup(c *gin.Context) {
+    backupId := c.Param("backupId")
+    if backupId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup id"})
+        return
+    }
+
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    tagCmd := exec.Command("restic", "-r", repo, "tag", "--remove", "locked", backupId)
+    tagCmd.Env = env
+    out, err := tagCmd.CombinedOutput()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock backup", "output": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "unlocked"})
 }
