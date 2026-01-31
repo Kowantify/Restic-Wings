@@ -74,15 +74,83 @@ func CreateServerResticBackup(c *gin.Context) {
             var snapshots []map[string]interface{}
             if err := json.Unmarshal(countOut, &snapshots); err == nil {
                 if len(snapshots) >= maxBackups {
-                    keepLast := maxBackups - 1
-                    if keepLast < 1 {
-                        keepLast = 1
+                    // Build locked set
+                    lockedIDs := map[string]bool{}
+                    lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+                    lockCmd.Env = env
+                    if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
+                        var lockedSnapshots []map[string]interface{}
+                        if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
+                            for _, snap := range lockedSnapshots {
+                                if id, ok := snap["id"].(string); ok && id != "" {
+                                    lockedIDs[id] = true
+                                    if len(id) >= 8 {
+                                        lockedIDs[id[:8]] = true
+                                    }
+                                }
+                                if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
+                                    lockedIDs[shortID] = true
+                                }
+                            }
+                        }
                     }
-                    pruneCmd := exec.Command("restic", "-r", repo, "forget", "--prune", "--keep-last", strconv.Itoa(keepLast), "--keep-tag", "locked")
-                    pruneCmd.Env = env
-                    if out, err := pruneCmd.CombinedOutput(); err != nil {
-                        c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+
+                    type snapItem struct {
+                        ID   string
+                        Time time.Time
+                    }
+
+                    parseTime := func(val interface{}) time.Time {
+                        s, _ := val.(string)
+                        if s == "" {
+                            return time.Time{}
+                        }
+                        if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+                            return t
+                        }
+                        if t, err := time.Parse(time.RFC3339, s); err == nil {
+                            return t
+                        }
+                        return time.Time{}
+                    }
+
+                    unlocked := make([]snapItem, 0, len(snapshots))
+                    for _, snap := range snapshots {
+                        id, _ := snap["id"].(string)
+                        shortID, _ := snap["short_id"].(string)
+                        if id != "" && len(id) >= 8 && shortID == "" {
+                            shortID = id[:8]
+                        }
+                        if (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID]) {
+                            continue
+                        }
+                        if id == "" {
+                            continue
+                        }
+                        unlocked = append(unlocked, snapItem{ID: id, Time: parseTime(snap["time"])})
+                    }
+
+                    sort.Slice(unlocked, func(i, j int) bool {
+                        return unlocked[i].Time.Before(unlocked[j].Time)
+                    })
+
+                    if len(unlocked) == 0 {
+                        c.JSON(http.StatusBadRequest, gin.H{"error": "backup limit reached and all snapshots are locked"})
                         return
+                    }
+
+                    toDelete := len(snapshots) - maxBackups + 1
+                    if toDelete < 1 {
+                        toDelete = 1
+                    }
+
+                    for i := 0; i < toDelete && i < len(unlocked); i++ {
+                        pruneCmd := exec.Command("restic", "-r", repo, "forget", unlocked[i].ID, "--prune")
+                        pruneCmd.Env = env
+                        if out, err := pruneCmd.CombinedOutput(); err != nil {
+                            c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+                            return
+                        }
                     }
                 }
             }
@@ -269,7 +337,8 @@ func ListServerResticBackups(c *gin.Context) {
             shortID = id[:8]
         }
 
-        if (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID]) {
+        isLocked := (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID])
+        if isLocked {
             if tags, ok := snap["tags"].([]interface{}); ok {
                 hasLocked := false
                 for _, t := range tags {
@@ -284,6 +353,11 @@ func ListServerResticBackups(c *gin.Context) {
             } else {
                 snap["tags"] = []string{"locked"}
             }
+        }
+        if isLocked {
+            snap["locked"] = true
+        } else {
+            snap["locked"] = false
         }
         items = append(items, snapshotItem{Raw: snap, Time: parseSnapshotTime(snap["time"])})
     }
@@ -520,6 +594,35 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
     return repo, env, nil
 }
 
+func resolveSnapshotID(repo string, env []string, backupId string) string {
+    if backupId == "" {
+        return ""
+    }
+    listCmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
+    listCmd.Env = env
+    out, err := listCmd.CombinedOutput()
+    if err != nil {
+        return backupId
+    }
+    var snapshots []map[string]interface{}
+    if err := json.Unmarshal(out, &snapshots); err != nil {
+        return backupId
+    }
+    for _, snap := range snapshots {
+        if id, ok := snap["id"].(string); ok && id != "" {
+            if id == backupId || (len(id) >= 8 && id[:8] == backupId) {
+                return id
+            }
+        }
+        if shortID, ok := snap["short_id"].(string); ok && shortID != "" && shortID == backupId {
+            if id, ok := snap["id"].(string); ok && id != "" {
+                return id
+            }
+        }
+    }
+    return backupId
+}
+
 // POST /api/servers/:server/backups/restic/:backupId/lock
 func LockServerResticBackup(c *gin.Context) {
     backupId := c.Param("backupId")
@@ -534,7 +637,8 @@ func LockServerResticBackup(c *gin.Context) {
         return
     }
 
-    tagCmd := exec.Command("restic", "-r", repo, "tag", "--add", "locked", backupId)
+    resolvedId := resolveSnapshotID(repo, env, backupId)
+    tagCmd := exec.Command("restic", "-r", repo, "tag", "--add", "locked", resolvedId)
     tagCmd.Env = env
     out, err := tagCmd.CombinedOutput()
     if err != nil {
@@ -559,7 +663,8 @@ func UnlockServerResticBackup(c *gin.Context) {
         return
     }
 
-    tagCmd := exec.Command("restic", "-r", repo, "tag", "--remove", "locked", backupId)
+    resolvedId := resolveSnapshotID(repo, env, backupId)
+    tagCmd := exec.Command("restic", "-r", repo, "tag", "--remove", "locked", resolvedId)
     tagCmd.Env = env
     out, err := tagCmd.CombinedOutput()
     if err != nil {
