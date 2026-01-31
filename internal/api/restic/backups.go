@@ -375,15 +375,59 @@ func GetServerResticStats(c *gin.Context) {
         return 0, false
     }
 
-    keys := []string{"total_size", "total_file_size", "total_uncompressed_size", "total_blob_size", "repository_size"}
-    for _, key := range keys {
+    var repoSize float64
+    var repoSizeOk bool
+    for _, key := range []string{"total_size", "repository_size", "total_blob_size"} {
         if v, ok := stats[key]; ok {
             if n, ok := extractNumber(v); ok {
-                stats["repo_size"] = n
+                repoSize = n
+                repoSizeOk = true
                 break
             }
         }
     }
 
-    c.JSON(http.StatusOK, stats)
+    var totalFileCount float64
+    var totalFileCountOk bool
+    for _, key := range []string{"total_file_count"} {
+        if v, ok := stats[key]; ok {
+            if n, ok := extractNumber(v); ok {
+                totalFileCount = n
+                totalFileCountOk = true
+                break
+            }
+        }
+    }
+
+    var logicalSize float64
+    var logicalSizeOk bool
+    for _, key := range []string{"total_uncompressed_size", "total_file_size"} {
+        if v, ok := stats[key]; ok {
+            if n, ok := extractNumber(v); ok {
+                logicalSize = n
+                logicalSizeOk = true
+                break
+            }
+        }
+    }
+
+    var ratio float64
+    ratioOk := false
+    if repoSizeOk && logicalSizeOk && repoSize > 0 {
+        ratio = logicalSize / repoSize
+        ratioOk = true
+    }
+
+    response := gin.H{}
+    if repoSizeOk {
+        response["repo_size"] = repoSize
+    }
+    if totalFileCountOk {
+        response["total_file_count"] = totalFileCount
+    }
+    if ratioOk {
+        response["compression_ratio"] = ratio
+    }
+
+    c.JSON(http.StatusOK, response)
 }
