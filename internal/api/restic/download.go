@@ -81,7 +81,12 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
         return
     }
 
-    tarCmd := exec.Command("tar", "-czf", gzFile, "-C", restoreDir, ".")
+    volumeSubdir := filepath.Join(restoreDir, "var/lib/pterodactyl/volumes", serverId)
+    tarBase := restoreDir
+    if st, err := os.Stat(volumeSubdir); err == nil && st.IsDir() {
+        tarBase = volumeSubdir
+    }
+    tarCmd := exec.Command("tar", "-czf", gzFile, "-C", tarBase, ".")
     var tarErr bytes.Buffer
     tarCmd.Stderr = &tarErr
     if err := tarCmd.Run(); err != nil {
