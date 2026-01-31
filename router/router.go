@@ -94,6 +94,8 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			server.GET("/backups/restic/stats", restic.GetServerResticStats)
 			server.POST("/backups/restic/:backupId/lock", restic.LockServerResticBackup)
 			server.POST("/backups/restic/:backupId/unlock", restic.UnlockServerResticBackup)
+			server.DELETE("/backups/restic/repo", restic.DeleteServerResticRepo)
+			server.POST("/backups/restic/repo/delete", restic.DeleteServerResticRepo)
 			server.POST("/backups/restic/:backupId/prepare", restic.PrepareServerResticBackupHandler)
 			server.POST("/backups/restic/:backupId/restore", restic.RestoreServerResticBackupHandler)
 			// Backwards-compatible restore route
