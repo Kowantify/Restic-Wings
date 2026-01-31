@@ -92,6 +92,9 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			server.POST("/backups/restic", restic.CreateServerResticBackup)
 			server.GET("/backups/restic", restic.ListServerResticBackups)
 			server.POST("/backups/restic/:backupId/prepare", restic.PrepareServerResticBackupHandler)
+			server.POST("/backups/restic/:backupId/restore", restic.RestoreServerResticBackupHandler)
+			// Backwards-compatible restore route
+			server.POST("/backups/restic/restore/:backupId", restic.RestoreServerResticBackupHandler)
 			server.GET("/backups/restic/:backupId/download", restic.DownloadServerResticBackup)
 
 		files := server.Group("/files")
