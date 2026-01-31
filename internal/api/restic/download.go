@@ -31,6 +31,19 @@ func DownloadServerResticBackup(c *gin.Context) {
 // DownloadServerResticBackupFromToken streams a Restic backup as tar.gz
 func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backupId, encryptionKey, ownerUsername string) {
     serverId := s.ID()
+    if backupId == "" {
+        backupId = c.Query("backup_id")
+    }
+    if backupId == "" {
+        backupId = c.Query("backupId")
+    }
+    if backupId == "" {
+        backupId = c.Query("id")
+    }
+    if backupId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup_id"})
+        return
+    }
     // Compose repo and temp file path
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
     tempDir := "/var/lib/pterodactyl/restic/temp"
