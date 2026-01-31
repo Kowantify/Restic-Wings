@@ -4,7 +4,11 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"time"
 
 	"emperror.dev/errors"
 	"github.com/apex/log"
@@ -192,6 +196,8 @@ func postServerReinstall(c *gin.Context) {
 func deleteServer(c *gin.Context) {
 	s := middleware.ExtractServer(c)
 
+	archiveResticRepo(s.ID())
+
 	// Immediately suspend the server to prevent a user from attempting
 	// to start it while this process is running.
 	s.Config().SetSuspended(true)
@@ -241,6 +247,63 @@ func deleteServer(c *gin.Context) {
 	})
 
 	c.Status(http.StatusNoContent)
+}
+
+// Best-effort archive of restic repo(s) for a server when it is deleted.
+// Moves matching repo folders to /var/lib/pterodactyl/restic/archive.
+func archiveResticRepo(serverId string) {
+	if serverId == "" {
+		return
+	}
+
+	base := "/var/lib/pterodactyl/restic"
+	archive := filepath.Join(base, "archive")
+	if err := os.MkdirAll(archive, 0755); err != nil {
+		log.WithFields(log.Fields{"path": archive, "error": err}).Warn("failed to create restic archive directory")
+		return
+	}
+
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		log.WithFields(log.Fields{"path": base, "error": err}).Warn("failed to read restic base directory")
+		return
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "archive" {
+			continue
+		}
+		if name == serverId || strings.HasPrefix(name, serverId+"+") {
+			from := filepath.Join(base, name)
+
+			keyPath := filepath.Join(from, ".restic-key")
+			if keyBytes, err := os.ReadFile(keyPath); err == nil {
+				key := strings.TrimSpace(string(keyBytes))
+				if key != "" {
+					cmd := exec.Command("restic", "-r", from, "forget", "--keep-last", "1", "--prune")
+					cmd.Env = append(os.Environ(), "RESTIC_PASSWORD="+key)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						log.WithFields(log.Fields{"repo": from, "error": err, "output": string(out)}).Warn("failed to prune restic repo to last snapshot before archive")
+					}
+				}
+			} else {
+				log.WithFields(log.Fields{"repo": from}).Warn("restic key missing; archiving full repo without pruning")
+			}
+
+			to := filepath.Join(archive, name+"-"+ts)
+			if _, statErr := os.Stat(to); statErr == nil {
+				to = filepath.Join(archive, name+"-"+ts+"-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+			}
+			if err := os.Rename(from, to); err != nil {
+				log.WithFields(log.Fields{"from": from, "to": to, "error": err}).Warn("failed to archive restic repo")
+			}
+		}
+	}
 }
 
 // Adds any of the JTIs passed through in the body to the deny list for the websocket
