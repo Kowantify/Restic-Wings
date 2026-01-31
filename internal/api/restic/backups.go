@@ -8,6 +8,7 @@ import (
     "os/exec"
     "sort"
     "strconv"
+    "strings"
     "time"
 
     "github.com/gin-gonic/gin"
@@ -673,4 +674,35 @@ func UnlockServerResticBackup(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, gin.H{"message": "unlocked", "locked": false})
+}
+
+// DELETE /api/servers/:server/backups/restic/repo
+func DeleteServerResticRepo(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    base := "/var/lib/pterodactyl/restic/"
+    entries, err := os.ReadDir(base)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir", "details": err.Error()})
+        return
+    }
+
+    deleted := 0
+    for _, entry := range entries {
+        name := entry.Name()
+        if name == serverId || strings.HasPrefix(name, serverId+"+") {
+            path := base + name
+            if err := os.RemoveAll(path); err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete repo", "details": err.Error()})
+                return
+            }
+            deleted++
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "repo deleted", "deleted": deleted})
 }
