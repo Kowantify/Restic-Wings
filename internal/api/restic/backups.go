@@ -338,19 +338,32 @@ func GetServerResticStats(c *gin.Context) {
         return
     }
 
-    statsCmd := exec.Command("restic", "-r", repo, "stats", "--json")
-    statsCmd.Env = env
-    out, err := statsCmd.CombinedOutput()
+    runStats := func(mode string) (map[string]interface{}, error) {
+        args := []string{"-r", repo, "stats", "--json"}
+        if mode != "" {
+            args = append(args, "--mode", mode)
+        }
+        cmd := exec.Command("restic", args...)
+        cmd.Env = env
+        out, err := cmd.CombinedOutput()
+        if err != nil {
+            return nil, fmt.Errorf("%s", string(out))
+        }
+        var parsed map[string]interface{}
+        if err := json.Unmarshal(out, &parsed); err != nil {
+            return nil, fmt.Errorf("%s", string(out))
+        }
+        return parsed, nil
+    }
+
+    stats, err := runStats("")
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get stats", "output": string(out)})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get stats", "output": err.Error()})
         return
     }
 
-    var stats map[string]interface{}
-    if err := json.Unmarshal(out, &stats); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse restic output", "output": string(out)})
-        return
-    }
+    rawStats, rawErr := runStats("raw-data")
+    restoreStats, restoreErr := runStats("restore-size")
 
     var extractNumber func(interface{}) (float64, bool)
     extractNumber = func(val interface{}) (float64, bool) {
@@ -377,34 +390,38 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
-    if v, ok := stats["total_size"]; ok {
-        if n, ok := extractNumber(v); ok {
-            response["total_size"] = n
+    // Compressed/encrypted on disk: prefer raw-data total_size
+    if rawErr == nil {
+        if v, ok := rawStats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_size"] = n
+            }
+        }
+    }
+    if _, ok := response["total_size"]; !ok {
+        if v, ok := stats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_size"] = n
+            }
         }
     }
 
-    if v, ok := stats["total_uncompressed_size"]; ok {
-        if n, ok := extractNumber(v); ok {
-            response["total_uncompressed_size"] = n
-        }
-    } else if v, ok := stats["total_file_size"]; ok {
-        if n, ok := extractNumber(v); ok {
-            response["total_uncompressed_size"] = n
+    // Uncompressed/restore size: prefer restore-size total_size
+    if restoreErr == nil {
+        if v, ok := restoreStats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_uncompressed_size"] = n
+            }
         }
     }
-
     if _, ok := response["total_uncompressed_size"]; !ok {
-        restoreCmd := exec.Command("restic", "-r", repo, "stats", "--json", "--mode", "restore-size")
-        restoreCmd.Env = env
-        restoreOut, restoreErr := restoreCmd.CombinedOutput()
-        if restoreErr == nil {
-            var restoreStats map[string]interface{}
-            if err := json.Unmarshal(restoreOut, &restoreStats); err == nil {
-                if v, ok := restoreStats["total_size"]; ok {
-                    if n, ok := extractNumber(v); ok {
-                        response["total_uncompressed_size"] = n
-                    }
-                }
+        if v, ok := stats["total_uncompressed_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_uncompressed_size"] = n
+            }
+        } else if v, ok := stats["total_file_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_uncompressed_size"] = n
             }
         }
     }
