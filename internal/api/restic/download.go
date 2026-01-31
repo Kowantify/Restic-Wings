@@ -46,7 +46,8 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
     // Clean up any leftover file from previous failed downloads
     _ = os.Remove(tarFile)
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    dumpCmd := exec.Command("restic", "-r", repo, "dump", "--archive", backupId, "/")
+    volumePath := fmt.Sprintf("/var/lib/pterodactyl/volumes/%s", serverId)
+    dumpCmd := exec.Command("restic", "-r", repo, "dump", "--archive", backupId, volumePath)
     gzipCmd := exec.Command("gzip")
     dumpCmd.Env = env
     dumpCmd.Stdout, _ = gzipCmd.StdinPipe()
@@ -80,6 +81,10 @@ func DownloadServerResticBackupFromToken(c *gin.Context, s *server.Server, backu
     }
     defer f.Close()
     if st, err := f.Stat(); err == nil {
+        if st.Size() == 0 {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "backup archive is empty"})
+            return
+        }
         c.Header("Content-Length", fmt.Sprintf("%d", st.Size()))
     }
     c.Header("Content-Type", "application/gzip")
