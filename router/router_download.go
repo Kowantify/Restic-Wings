@@ -88,6 +88,12 @@ func getDownloadResticBackup(c *gin.Context) {
 		token.BackupId = c.Query("backup_id")
 	}
 	if token.BackupId == "" {
+		token.BackupId = c.Query("backupId")
+	}
+	if token.BackupId == "" {
+		token.BackupId = c.Query("id")
+	}
+	if token.BackupId == "" {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 			"error": "Missing backup_id in token or query.",
 		})
