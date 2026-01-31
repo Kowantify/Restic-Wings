@@ -393,6 +393,22 @@ func GetServerResticStats(c *gin.Context) {
         }
     }
 
+    if _, ok := response["total_uncompressed_size"]; !ok {
+        restoreCmd := exec.Command("restic", "-r", repo, "stats", "--json", "--mode", "restore-size")
+        restoreCmd.Env = env
+        restoreOut, restoreErr := restoreCmd.CombinedOutput()
+        if restoreErr == nil {
+            var restoreStats map[string]interface{}
+            if err := json.Unmarshal(restoreOut, &restoreStats); err == nil {
+                if v, ok := restoreStats["total_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                    }
+                }
+            }
+        }
+    }
+
     if v, ok := stats["snapshots_count"]; ok {
         if n, ok := extractNumber(v); ok {
             response["snapshots_count"] = n
