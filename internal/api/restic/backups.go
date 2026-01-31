@@ -352,7 +352,8 @@ func GetServerResticStats(c *gin.Context) {
         return
     }
 
-    extractNumber := func(val interface{}) (float64, bool) {
+    var extractNumber func(interface{}) (float64, bool)
+    extractNumber = func(val interface{}) (float64, bool) {
         switch t := val.(type) {
         case float64:
             return t, true
