@@ -22,16 +22,19 @@ func CreateServerResticBackup(c *gin.Context) {
     }
 
     var ownerUsername, encryptionKey string
+    var maxBackups int
     if v, ok := c.GetPostForm("owner_username"); ok && v != "" {
         ownerUsername = v
     } else {
         var body struct {
             OwnerUsername string `json:"owner_username"`
             EncryptionKey string `json:"encryption_key"`
+            MaxBackups    int    `json:"max_backups"`
         }
         if err := c.ShouldBindJSON(&body); err == nil {
             ownerUsername = body.OwnerUsername
             encryptionKey = body.EncryptionKey
+            maxBackups = body.MaxBackups
         }
     }
     if encryptionKey == "" {
@@ -59,6 +62,30 @@ func CreateServerResticBackup(c *gin.Context) {
         if out, err := initCmd.CombinedOutput(); err != nil {
             c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out)})
             return
+        }
+    }
+
+    // Prune oldest backup if maxBackups reached
+    if maxBackups > 0 {
+        countCmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
+        countCmd.Env = env
+        countOut, countErr := countCmd.CombinedOutput()
+        if countErr == nil {
+            var snapshots []map[string]interface{}
+            if err := json.Unmarshal(countOut, &snapshots); err == nil {
+                if len(snapshots) >= maxBackups {
+                    keepLast := maxBackups - 1
+                    if keepLast < 1 {
+                        keepLast = 1
+                    }
+                    pruneCmd := exec.Command("restic", "-r", repo, "forget", "--prune", "--keep-last", strconv.Itoa(keepLast))
+                    pruneCmd.Env = env
+                    if out, err := pruneCmd.CombinedOutput(); err != nil {
+                        c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+                        return
+                    }
+                }
+            }
         }
     }
 
