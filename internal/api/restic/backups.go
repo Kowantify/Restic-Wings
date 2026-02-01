@@ -722,12 +722,10 @@ func GetServerResticStats(c *gin.Context) {
 
     includeUncompressed := c.Query("include_uncompressed") == "1"
     if includeUncompressed {
-        if _, ok := response["total_uncompressed_size"]; !ok {
-            if restoreStats, restoreErr := runStats("restore-size", 60*time.Second); restoreErr == nil {
-                if v, ok := restoreStats["total_size"]; ok {
-                    if n, ok := extractNumber(v); ok {
-                        response["total_uncompressed_size"] = n
-                    }
+        if restoreStats, restoreErr := runStats("restore-size", 120*time.Second); restoreErr == nil {
+            if v, ok := restoreStats["total_size"]; ok {
+                if n, ok := extractNumber(v); ok {
+                    response["total_uncompressed_size"] = n
                 }
             }
         }
