@@ -112,7 +112,7 @@ func CreateServerResticBackup(c *gin.Context) {
 
     // Prune oldest backup if maxBackups reached (keep locked snapshots)
     if maxBackups > 0 {
-        countCmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
+        countCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--no-lock")
         countCmd.Env = env
         countOut, countErr := countCmd.CombinedOutput()
         if countErr == nil {
@@ -156,7 +156,7 @@ func CreateServerResticBackup(c *gin.Context) {
                         }
                     }
                     if !sawTags {
-                        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+                        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked", "--no-lock")
                         lockCmd.Env = env
                         if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
                             var lockedSnapshots []map[string]interface{}
@@ -319,7 +319,7 @@ func ListServerResticBackups(c *gin.Context) {
     cursorStr := c.Query("cursor")
 
     // List snapshots (fast path when no filters/cursor)
-    args := []string{"-r", repo, "snapshots", "--json"}
+    args := []string{"-r", repo, "snapshots", "--json", "--no-lock"}
     totalUnknown := false
     if sinceStr == "" && untilStr == "" && cursorStr == "" && limit > 0 {
         args = append(args, "--latest", strconv.Itoa(limit))
@@ -404,7 +404,7 @@ func ListServerResticBackups(c *gin.Context) {
         }
     }
     if !sawTags {
-        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked", "--no-lock")
         lockCmd.Env = env
         if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
             var lockedSnapshots []map[string]interface{}
@@ -641,12 +641,12 @@ func GetServerResticStats(c *gin.Context) {
         return
     }
 
-    runStats := func(mode string) (map[string]interface{}, error) {
+    runStats := func(mode string, timeout time.Duration) (map[string]interface{}, error) {
         args := []string{"-r", repo, "stats", "--json", "--no-lock"}
         if mode != "" {
             args = append(args, "--mode", mode)
         }
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        ctx, cancel := context.WithTimeout(context.Background(), timeout)
         defer cancel()
         cmd := exec.CommandContext(ctx, "restic", args...)
         cmd.Env = env
@@ -693,7 +693,7 @@ func GetServerResticStats(c *gin.Context) {
         response["total_size"] = repoSize
     }
 
-    stats, err := runStats("")
+    stats, err := runStats("", 30*time.Second)
     if err == nil {
         if _, ok := response["total_size"]; !ok {
             if v, ok := stats["total_size"]; ok {
@@ -716,6 +716,19 @@ func GetServerResticStats(c *gin.Context) {
         if v, ok := stats["snapshots_count"]; ok {
             if n, ok := extractNumber(v); ok {
                 response["snapshots_count"] = n
+            }
+        }
+    }
+
+    includeUncompressed := c.Query("include_uncompressed") == "1"
+    if includeUncompressed {
+        if _, ok := response["total_uncompressed_size"]; !ok {
+            if restoreStats, restoreErr := runStats("restore-size", 60*time.Second); restoreErr == nil {
+                if v, ok := restoreStats["total_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                    }
+                }
             }
         }
     }
