@@ -2,6 +2,8 @@ package restic
 
 import (
     "context"
+    "crypto/sha256"
+    "encoding/hex"
     "encoding/json"
     "fmt"
     "net/http"
@@ -727,10 +729,15 @@ func GetServerResticStats(c *gin.Context) {
 
     includeUncompressed := c.Query("include_uncompressed") == "1"
     if includeUncompressed {
-        if restoreStats, restoreErr := runStats("restore-size", 120*time.Second); restoreErr == nil {
-            if v, ok := restoreStats["total_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_uncompressed_size"] = n
+        if cache, ok := readStatsCache(repo); ok {
+            response["total_uncompressed_size"] = cache.UncompressedSize
+        } else {
+            if restoreStats, restoreErr := runStats("restore-size", 300*time.Second); restoreErr == nil {
+                if v, ok := restoreStats["total_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                        writeStatsCache(repo, n)
+                    }
                 }
             }
         }
@@ -955,6 +962,58 @@ func writeBackupStatus(serverId string, status resticBackupStatus) {
         _ = os.Rename(tmp, statusPath(serverId))
     }
     cleanupStatusDir(statusDir(), 7*24*time.Hour)
+}
+
+type resticStatsCache struct {
+    UncompressedSize float64 `json:"uncompressed_size"`
+    UpdatedAt        string  `json:"updated_at"`
+}
+
+func statsCacheDir() string {
+    return "/var/lib/pterodactyl/restic/.stats"
+}
+
+func statsCachePath(repo string) string {
+    sum := sha256.Sum256([]byte(repo))
+    short := hex.EncodeToString(sum[:8])
+    return filepath.Join(statsCacheDir(), short+".json")
+}
+
+func readStatsCache(repo string) (resticStatsCache, bool) {
+    var cache resticStatsCache
+    data, err := os.ReadFile(statsCachePath(repo))
+    if err != nil {
+        return cache, false
+    }
+    if err := json.Unmarshal(data, &cache); err != nil {
+        return resticStatsCache{}, false
+    }
+    if cache.UpdatedAt == "" {
+        return resticStatsCache{}, false
+    }
+    if t, err := time.Parse(time.RFC3339, cache.UpdatedAt); err == nil {
+        if time.Since(t) <= 12*time.Hour {
+            return cache, true
+        }
+    }
+    return cache, false
+}
+
+func writeStatsCache(repo string, uncompressed float64) {
+    if repo == "" || uncompressed <= 0 {
+        return
+    }
+    _ = os.MkdirAll(statsCacheDir(), 0755)
+    cache := resticStatsCache{
+        UncompressedSize: uncompressed,
+        UpdatedAt:        time.Now().Format(time.RFC3339),
+    }
+    if data, err := json.Marshal(cache); err == nil {
+        tmp := statsCachePath(repo) + ".tmp"
+        if err := os.WriteFile(tmp, data, 0644); err == nil {
+            _ = os.Rename(tmp, statsCachePath(repo))
+        }
+    }
 }
 
 func cleanupStatusDir(dir string, maxAge time.Duration) {
