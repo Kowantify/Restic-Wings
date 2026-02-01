@@ -102,6 +102,7 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			server.POST("/backups/restic/repo/delete", restic.DeleteServerResticRepo)
 			server.GET("/backups/restic/repo/exists", restic.CheckServerResticRepo)
 			server.GET("/backups/restic/repo/size", restic.GetServerResticRepoDiskUsage)
+			server.POST("/backups/restic/repo/check", restic.CheckServerResticRepoHealth)
 			server.POST("/backups/restic/:backupId/prepare", restic.PrepareServerResticBackupHandler)
 			server.GET("/backups/restic/:backupId/prepare/status", restic.GetServerResticBackupPrepareStatus)
 			server.POST("/backups/restic/:backupId/restore", restic.RestoreServerResticBackupHandler)
