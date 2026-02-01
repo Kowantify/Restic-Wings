@@ -23,6 +23,26 @@ func CreateServerResticBackup(c *gin.Context) {
         return
     }
 
+    if status, err := readBackupStatus(serverId); err == nil && status.Status == "running" {
+        if status.StartedAt != "" {
+            if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+                if time.Since(started) <= 6*time.Hour {
+                    c.JSON(http.StatusConflict, gin.H{"error": "backup already running"})
+                    return
+                }
+                status.Status = "failed"
+                status.FinishedAt = time.Now().Format(time.RFC3339)
+                if status.Message == "" {
+                    status.Message = "Backup appears stale. Please retry."
+                }
+                writeBackupStatus(serverId, status)
+            }
+        } else {
+            c.JSON(http.StatusConflict, gin.H{"error": "backup already running"})
+            return
+        }
+    }
+
     var ownerUsername, encryptionKey string
     var maxBackups int
     var maxRepoBytes int64
