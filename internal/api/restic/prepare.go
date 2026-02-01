@@ -57,7 +57,7 @@ func PrepareServerResticBackupHandler(c *gin.Context) {
         serverId := s.ID()
         go func() {
             if err := prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerUsername); err != nil {
-                setDownloadStatus(serverId, backupId, "failed", "prepare failed")
+                setDownloadStatus(serverId, backupId, "failed", err.Error())
                 return
             }
             setDownloadStatus(serverId, backupId, "ready", "")
@@ -67,7 +67,7 @@ func PrepareServerResticBackupHandler(c *gin.Context) {
     }
 
     if err := prepareServerResticBackupInternal(s.ID(), backupId, encryptionKey, ownerUsername); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
     }
 
@@ -232,7 +232,14 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
     restoreCmd.Stderr = &restoreErr
     if err := restoreCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
-        return err
+        if restoreCtx.Err() == context.DeadlineExceeded {
+            return fmt.Errorf("restore timed out")
+        }
+        detail := strings.TrimSpace(restoreErr.String())
+        if detail == "" {
+            detail = err.Error()
+        }
+        return fmt.Errorf("restic restore failed: %s", detail)
     }
 
     volumeSubdir := filepath.Join(restoreDir, "var/lib/pterodactyl/volumes", serverId)
@@ -256,7 +263,14 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
     if err := tarCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
         _ = os.Remove(tarZstFile)
-        return err
+        if tarCtx.Err() == context.DeadlineExceeded {
+            return fmt.Errorf("archive timed out")
+        }
+        detail := strings.TrimSpace(tarErr.String())
+        if detail == "" {
+            detail = err.Error()
+        }
+        return fmt.Errorf("archive failed: %s", detail)
     }
 
     _ = os.RemoveAll(restoreDir)
