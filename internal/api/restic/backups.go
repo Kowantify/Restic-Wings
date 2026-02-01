@@ -558,6 +558,32 @@ func ListServerResticBackups(c *gin.Context) {
         page = append(page, item.Raw)
     }
 
+    extractNumber := func(val interface{}) (float64, bool) {
+        switch t := val.(type) {
+        case float64:
+            return t, true
+        case float32:
+            return float64(t), true
+        case int:
+            return float64(t), true
+        case int64:
+            return float64(t), true
+        case string:
+            if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil {
+                return f, true
+            }
+        case json.Number:
+            if f, err := t.Float64(); err == nil {
+                return f, true
+            }
+        case map[string]interface{}:
+            if v, ok := t["bytes"]; ok {
+                return extractNumber(v)
+            }
+        }
+        return 0, false
+    }
+
     // Fill snapshot size for the current page when missing (best-effort)
     if len(page) > 0 {
         for _, snap := range page {
