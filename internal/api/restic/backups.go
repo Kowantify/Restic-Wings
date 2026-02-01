@@ -1280,11 +1280,25 @@ func GetServerResticLocks(c *gin.Context) {
             entry["locks"] = locks
             entry["locked"] = len(locks) > 0
         } else {
-            fallbackLocks := parseResticLockOutput(string(out))
+            // Fallback to plain text output
+            textCmd := exec.Command("restic", "-r", repo, "list", "locks")
+            textCmd.Env = env
+            textOut, _ := textCmd.CombinedOutput()
+            fallbackLocks := parseResticLockOutput(string(textOut))
             entry["locks"] = fallbackLocks
             entry["locked"] = len(fallbackLocks) > 0
             if len(fallbackLocks) == 0 {
-                entry["error"] = "invalid lock data"
+                raw := strings.TrimSpace(string(out))
+                if raw == "" {
+                    raw = strings.TrimSpace(string(textOut))
+                }
+                if raw == "" {
+                    entry["error"] = "invalid lock data"
+                } else if strings.Contains(strings.ToLower(raw), "wrong password") || strings.Contains(strings.ToLower(raw), "ciphertext") {
+                    entry["error"] = "invalid repository password"
+                } else {
+                    entry["error"] = raw
+                }
             }
         }
         results = append(results, entry)
