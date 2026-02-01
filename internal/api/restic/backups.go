@@ -1354,7 +1354,18 @@ func parseResticLockOutput(output string) []map[string]interface{} {
         lock["raw"] = "locked"
         return []map[string]interface{}{lock}
     }
-    return []map[string]interface{}{}
+    lines := strings.Split(out, "\n")
+    locks := []map[string]interface{}{}
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line == "" {
+            continue
+        }
+        if len(line) >= 8 {
+            locks = append(locks, map[string]interface{}{"id": line})
+        }
+    }
+    return locks
 }
 
 // POST /api/servers/:server/backups/restic/unlock
