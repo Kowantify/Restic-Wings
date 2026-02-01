@@ -752,6 +752,49 @@ func isKeyMismatchError(output string) bool {
         strings.Contains(lower, "config or key")
 }
 
+func isRepoLockedError(output string) bool {
+    lower := strings.ToLower(output)
+    return strings.Contains(lower, "repository is already locked") ||
+        strings.Contains(lower, "unable to create lock")
+}
+
+func parseLockCreatedAt(output string) *time.Time {
+    marker := "lock was created at "
+    idx := strings.Index(output, marker)
+    if idx == -1 {
+        return nil
+    }
+    rest := output[idx+len(marker):]
+    end := strings.Index(rest, " (")
+    if end == -1 {
+        end = len(rest)
+    }
+    ts := strings.TrimSpace(rest[:end])
+    if ts == "" {
+        return nil
+    }
+    if t, err := time.Parse("2006-01-02 15:04:05", ts); err == nil {
+        return &t
+    }
+    return nil
+}
+
+func tryUnlockStaleLock(repo string, env []string, output string) bool {
+    createdAt := parseLockCreatedAt(output)
+    if createdAt == nil {
+        return false
+    }
+    if time.Since(*createdAt) < 30*time.Minute {
+        return false
+    }
+    unlockCmd := exec.Command("restic", "-r", repo, "unlock")
+    unlockCmd.Env = env
+    if _, err := unlockCmd.CombinedOutput(); err != nil {
+        return false
+    }
+    return true
+}
+
 func runBackupWithRecovery(repo string, env []string, volumePath string, encryptionKey string, serverId string) (string, error) {
     cmd := exec.Command("restic", "-r", repo, "backup", volumePath)
     cmd.Env = env
@@ -759,6 +802,20 @@ func runBackupWithRecovery(repo string, env []string, volumePath string, encrypt
     if err == nil {
         setBackupStatus(serverId, "completed", "")
         return string(out), nil
+    }
+
+    if isRepoLockedError(string(out)) {
+        if tryUnlockStaleLock(repo, env, string(out)) {
+            retry := exec.Command("restic", "-r", repo, "backup", volumePath)
+            retry.Env = env
+            retryOut, retryErr := retry.CombinedOutput()
+            if retryErr == nil {
+                setBackupStatus(serverId, "completed", "")
+                return string(retryOut), nil
+            }
+            setBackupStatus(serverId, "failed", truncateStatusMessage(string(retryOut)))
+            return string(retryOut), retryErr
+        }
     }
 
     if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) && isSafeToReinitRepo(repo) {
@@ -1034,7 +1091,18 @@ func LockServerResticBackup(c *gin.Context) {
     tagCmd.Env = env
     out, err := tagCmd.CombinedOutput()
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to lock backup", "output": string(out)})
+        if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
+            retry := exec.Command("restic", "-r", repo, "tag", "--add", "locked", resolvedId)
+            retry.Env = env
+            if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+                c.JSON(http.StatusOK, gin.H{"message": "locked", "locked": true})
+                return
+            } else {
+                out = retryOut
+                err = retryErr
+            }
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to lock backup"})
         return
     }
 
@@ -1060,7 +1128,18 @@ func UnlockServerResticBackup(c *gin.Context) {
     tagCmd.Env = env
     out, err := tagCmd.CombinedOutput()
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock backup", "output": string(out)})
+        if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
+            retry := exec.Command("restic", "-r", repo, "tag", "--remove", "locked", resolvedId)
+            retry.Env = env
+            if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+                c.JSON(http.StatusOK, gin.H{"message": "unlocked", "locked": false})
+                return
+            } else {
+                out = retryOut
+                err = retryErr
+            }
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock backup"})
         return
     }
 
@@ -1114,7 +1193,15 @@ func PruneServerResticBackup(c *gin.Context) {
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+        if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
+            retry := exec.Command("restic", args...)
+            retry.Env = env
+            if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+                c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": string(retryOut)})
+                return
+            }
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed"})
         return
     }
 
