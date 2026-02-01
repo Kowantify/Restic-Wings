@@ -35,7 +35,8 @@ func RestoreServerResticBackupHandler(c *gin.Context) {
 
     s := c.MustGet("server").(*server.Server)
     serverId := s.ID()
-    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
+    repoDir := resolveRepoDir(serverId, ownerUsername)
+    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     targetPath := fmt.Sprintf("/var/lib/pterodactyl/volumes/%s", serverId)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)

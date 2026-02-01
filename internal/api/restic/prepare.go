@@ -153,7 +153,8 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
         return fmt.Errorf("missing encryption_key or owner_username")
     }
 
-    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
+    repoDir := resolveRepoDir(serverId, ownerUsername)
+    repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
