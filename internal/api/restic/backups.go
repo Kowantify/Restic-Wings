@@ -496,11 +496,6 @@ func ensureResticKeyFile(repo string, encryptionKey string) {
         return
     }
     keyPath := filepath.Join(repo, ".restic-key")
-    if existing, err := os.ReadFile(keyPath); err == nil {
-        if strings.TrimSpace(string(existing)) != "" {
-            return
-        }
-    }
     _ = os.WriteFile(keyPath, []byte(encryptionKey+"\n"), 0600)
 }
 
@@ -682,13 +677,6 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
         repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
     }
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
-
-    keyPath := filepath.Join(repo, ".restic-key")
-    if existing, err := os.ReadFile(keyPath); err == nil {
-        if trimmed := strings.TrimSpace(string(existing)); trimmed != "" {
-            encryptionKey = trimmed
-        }
-    }
 
     if encryptionKey == "" {
         return "", nil, fmt.Errorf("missing encryption key")
