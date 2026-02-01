@@ -81,26 +81,10 @@ func CreateServerResticBackup(c *gin.Context) {
     }
 
     if maxRepoBytes > 0 {
-        statsCmd := exec.Command("restic", "-r", repo, "stats", "--json")
-        statsCmd.Env = env
-        statsOut, statsErr := statsCmd.CombinedOutput()
-        if statsErr == nil {
-            var stats map[string]interface{}
-            if err := json.Unmarshal(statsOut, &stats); err == nil {
-                if v, ok := stats["total_size"]; ok {
-                    switch t := v.(type) {
-                    case float64:
-                        if int64(t) >= maxRepoBytes {
-                            c.JSON(http.StatusBadRequest, gin.H{"error": "repo size limit reached"})
-                            return
-                        }
-                    case json.Number:
-                        if n, err := t.Int64(); err == nil && n >= maxRepoBytes {
-                            c.JSON(http.StatusBadRequest, gin.H{"error": "repo size limit reached"})
-                            return
-                        }
-                    }
-                }
+        if repoSize, err := getRepoSizeBytes(repo); err == nil {
+            if repoSize >= maxRepoBytes {
+                c.JSON(http.StatusBadRequest, gin.H{"error": "repo size limit reached"})
+                return
             }
         }
     }
@@ -238,6 +222,18 @@ func CreateServerResticBackup(c *gin.Context) {
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err != nil {
+        if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) {
+            if reinitErr := reinitRepo(repo, resolvedKey); reinitErr == nil {
+                retry := exec.Command("restic", "-r", repo, "backup", volumePath)
+                retry.Env = env
+                retryOut, retryErr := retry.CombinedOutput()
+                if retryErr == nil {
+                    c.JSON(http.StatusOK, gin.H{"message": "backup created", "output": string(retryOut)})
+                    return
+                }
+                out = retryOut
+            }
+        }
         c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out)})
         return
     }
@@ -750,6 +746,62 @@ func buildResticEnv(encryptionKey string) []string {
     }
     filtered = append(filtered, "RESTIC_PASSWORD="+encryptionKey)
     return filtered
+}
+
+func isKeyMismatchError(output string) bool {
+    lower := strings.ToLower(output)
+    return strings.Contains(lower, "ciphertext verification failed") ||
+        strings.Contains(lower, "wrong password") ||
+        strings.Contains(lower, "config or key")
+}
+
+func isRecentRepo(repo string, window time.Duration) bool {
+    st, err := os.Stat(filepath.Join(repo, "config"))
+    if err != nil {
+        return false
+    }
+    return time.Since(st.ModTime()) <= window
+}
+
+func reinitRepo(repo string, encryptionKey string) error {
+    if repo == "" {
+        return fmt.Errorf("missing repo")
+    }
+    _ = os.RemoveAll(repo)
+    if err := os.MkdirAll(repo, 0755); err != nil {
+        return err
+    }
+    _, err := resolveResticKey(repo, encryptionKey)
+    if err != nil {
+        return err
+    }
+    env := buildResticEnv(encryptionKey)
+    initCmd := exec.Command("restic", "-r", repo, "init")
+    initCmd.Env = env
+    if _, err := initCmd.CombinedOutput(); err != nil {
+        return err
+    }
+    return nil
+}
+
+func getRepoSizeBytes(repo string) (int64, error) {
+    if repo == "" {
+        return 0, fmt.Errorf("missing repo")
+    }
+    cmd := exec.Command("du", "-sb", repo)
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        return 0, err
+    }
+    fields := strings.Fields(string(out))
+    if len(fields) == 0 {
+        return 0, fmt.Errorf("failed to read repo size")
+    }
+    size, err := strconv.ParseInt(fields[0], 10, 64)
+    if err != nil {
+        return 0, err
+    }
+    return size, nil
 }
 
 func resolveRepoDir(serverId string, ownerUsername string) string {
