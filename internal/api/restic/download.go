@@ -5,7 +5,6 @@ import (
     "io"
     "net/http"
     "os"
-    "path/filepath"
 
     "github.com/gin-gonic/gin"
     "github.com/pterodactyl/wings/server"
@@ -23,7 +22,8 @@ func DownloadServerResticBackup(c *gin.Context) {
     }
 
     s := c.MustGet("server").(*server.Server)
-    if err := PrepareServerResticBackup(c, s, backupId, encryptionKey, ownerUsername); err != nil {
+    if err := prepareServerResticBackupInternal(s.ID(), backupId, encryptionKey, ownerUsername); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
         return
     }
     StreamPreparedResticBackup(c, s, backupId)
@@ -60,7 +60,7 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
     if len(shortId) > 8 {
         shortId = shortId[:8]
     }
-    tarZstFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.zst")
+    tarZstFile := preparedArchivePath(serverId, backupId)
     f, err := os.Open(tarZstFile)
     if err != nil {
         _ = os.Remove(tarZstFile)

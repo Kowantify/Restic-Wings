@@ -2,6 +2,9 @@ package restic
 
 import (
     "bytes"
+    "context"
+    "crypto/sha256"
+    "encoding/hex"
     "encoding/json"
     "fmt"
     "net/http"
@@ -37,20 +40,34 @@ func PrepareServerResticBackupHandler(c *gin.Context) {
     asyncParam := strings.ToLower(strings.TrimSpace(c.Query("async")))
     async := asyncParam == "1" || asyncParam == "true" || asyncParam == "yes"
 
+    if backupId == "" {
+        backupId = c.Query("backup_id")
+    }
+    if backupId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup_id"})
+        return
+    }
+    if encryptionKey == "" || ownerUsername == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing encryption_key or owner_username"})
+        return
+    }
+
     if async {
         setDownloadStatus(s.ID(), backupId, "running", "")
+        serverId := s.ID()
         go func() {
-            if err := PrepareServerResticBackup(c, s, backupId, encryptionKey, ownerUsername); err != nil {
-                setDownloadStatus(s.ID(), backupId, "failed", "prepare failed")
+            if err := prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerUsername); err != nil {
+                setDownloadStatus(serverId, backupId, "failed", "prepare failed")
                 return
             }
-            setDownloadStatus(s.ID(), backupId, "ready", "")
+            setDownloadStatus(serverId, backupId, "ready", "")
         }()
         c.JSON(http.StatusAccepted, gin.H{"message": "preparing"})
         return
     }
 
-    if err := PrepareServerResticBackup(c, s, backupId, encryptionKey, ownerUsername); err != nil {
+    if err := prepareServerResticBackupInternal(s.ID(), backupId, encryptionKey, ownerUsername); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
         return
     }
 
@@ -152,32 +169,51 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
         c.JSON(http.StatusBadRequest, gin.H{"error": "missing encryption_key or owner_username"})
         return fmt.Errorf("missing encryption_key or owner_username")
     }
+    if err := prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerUsername); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
+        return err
+    }
+    return nil
+}
+
+func preparedArchivePath(serverId, backupId string) string {
+    tempDir := "/var/lib/pterodactyl/restic/temp"
+    sum := sha256.Sum256([]byte(backupId))
+    short := hex.EncodeToString(sum[:8])
+    return filepath.Join(tempDir, serverId+"-"+short+".tar.zst")
+}
+
+func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerUsername string) error {
+    if backupId == "" {
+        return fmt.Errorf("missing backup_id")
+    }
+    if encryptionKey == "" || ownerUsername == "" {
+        return fmt.Errorf("missing encryption_key or owner_username")
+    }
 
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
         return err
     }
 
-    shortId := backupId
-    if len(shortId) > 8 {
-        shortId = shortId[:8]
-    }
+    sum := sha256.Sum256([]byte(backupId))
+    short := hex.EncodeToString(sum[:8])
 
-    restoreDir := filepath.Join(tempDir, serverId+"-"+shortId+"-restore")
+    restoreDir := filepath.Join(tempDir, serverId+"-"+short+"-restore")
     _ = os.RemoveAll(restoreDir)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
-    restoreCmd := exec.Command("restic", "-r", repo, "restore", backupId, "--target", restoreDir)
+    restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 2*time.Hour)
+    defer restoreCancel()
+    restoreCmd := exec.CommandContext(restoreCtx, "restic", "-r", repo, "restore", backupId, "--target", restoreDir)
     restoreCmd.Env = env
 
     var restoreErr bytes.Buffer
     restoreCmd.Stderr = &restoreErr
     if err := restoreCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed"})
         return err
     }
 
@@ -187,14 +223,21 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
         tarBase = volumeSubdir
     }
 
-    tarZstFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.zst")
+    tarZstFile := preparedArchivePath(serverId, backupId)
+    if st, err := os.Stat(tarZstFile); err == nil && st.Size() > 0 {
+        _ = os.RemoveAll(restoreDir)
+        return nil
+    }
     _ = os.Remove(tarZstFile)
 
-    tarCmd := exec.Command("tar", "-I", "zstd -3 -T0", "-cf", tarZstFile, "-C", tarBase, ".")
+    tarCtx, tarCancel := context.WithTimeout(context.Background(), 2*time.Hour)
+    defer tarCancel()
+    tarCmd := exec.CommandContext(tarCtx, "tar", "-I", "zstd -3 -T0", "-cf", tarZstFile, "-C", tarBase, ".")
     var tarErr bytes.Buffer
     tarCmd.Stderr = &tarErr
     if err := tarCmd.Run(); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "tar failed"})
+        _ = os.RemoveAll(restoreDir)
+        _ = os.Remove(tarZstFile)
         return err
     }
 
