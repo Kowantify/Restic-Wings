@@ -592,14 +592,21 @@ func ListServerResticBackups(c *gin.Context) {
                 continue
             }
             id, _ := snap["id"].(string)
-            if id == "" {
+            shortID, _ := snap["short_id"].(string)
+            if shortID == "" && len(id) >= 8 {
+                shortID = id[:8]
+            }
+            if id == "" && shortID == "" {
                 continue
             }
 
-            tryStats := func(mode string) (float64, bool) {
+            tryStats := func(snapshotId string, mode string) (float64, bool) {
+                if snapshotId == "" {
+                    return 0, false
+                }
                 ctxSnap, cancelSnap := context.WithTimeout(context.Background(), 30*time.Second)
                 defer cancelSnap()
-                args := []string{"-r", repo, "stats", "--json", "--no-lock", "--snapshot", id}
+                args := []string{"-r", repo, "stats", "--json", "--no-lock", "--snapshot", snapshotId}
                 if mode != "" {
                     args = append(args, "--mode", mode)
                 }
@@ -621,11 +628,19 @@ func ListServerResticBackups(c *gin.Context) {
                 return 0, false
             }
 
-            if n, ok := tryStats("raw-data"); ok {
+            if n, ok := tryStats(id, "raw-data"); ok {
                 snap["size"] = n
                 continue
             }
-            if n, ok := tryStats(""); ok {
+            if n, ok := tryStats(id, ""); ok {
+                snap["size"] = n
+                continue
+            }
+            if n, ok := tryStats(shortID, "raw-data"); ok {
+                snap["size"] = n
+                continue
+            }
+            if n, ok := tryStats(shortID, ""); ok {
                 snap["size"] = n
             }
         }
