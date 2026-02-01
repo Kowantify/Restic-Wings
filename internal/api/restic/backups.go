@@ -693,25 +693,11 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
-    includeRaw := c.Query("include_raw") != "0"
-    if includeRaw {
-        rawStats, rawErr := runStats("raw-data", 30*time.Second)
-        if rawErr == nil {
-            if v, ok := rawStats["total_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_size"] = n
-                }
-            }
-        }
-    }
-
     stats, err := runStats("", 30*time.Second)
     if err == nil {
-        if _, ok := response["total_size"]; !ok {
-            if v, ok := stats["total_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_size"] = n
-                }
+        if v, ok := stats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_size"] = n
             }
         }
 
