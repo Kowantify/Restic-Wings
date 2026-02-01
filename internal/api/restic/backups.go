@@ -768,6 +768,60 @@ func UnlockServerResticBackup(c *gin.Context) {
     c.JSON(http.StatusOK, gin.H{"message": "unlocked", "locked": false})
 }
 
+// POST /api/servers/:server/backups/restic/prune
+func PruneServerResticBackup(c *gin.Context) {
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    var body struct {
+        KeepLast   int    `json:"keep_last"`
+        KeepDaily  int    `json:"keep_daily"`
+        KeepWeekly int    `json:"keep_weekly"`
+        KeepMonthly int   `json:"keep_monthly"`
+        KeepYearly int    `json:"keep_yearly"`
+        KeepWithin string `json:"keep_within"`
+    }
+    _ = c.ShouldBindJSON(&body)
+
+    if body.KeepLast <= 0 && body.KeepDaily <= 0 && body.KeepWeekly <= 0 && body.KeepMonthly <= 0 && body.KeepYearly <= 0 && strings.TrimSpace(body.KeepWithin) == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "at least one retention rule is required"})
+        return
+    }
+
+    args := []string{"-r", repo, "forget", "--prune", "--keep-tag", "locked"}
+    if body.KeepLast > 0 {
+        args = append(args, "--keep-last", strconv.Itoa(body.KeepLast))
+    }
+    if body.KeepDaily > 0 {
+        args = append(args, "--keep-daily", strconv.Itoa(body.KeepDaily))
+    }
+    if body.KeepWeekly > 0 {
+        args = append(args, "--keep-weekly", strconv.Itoa(body.KeepWeekly))
+    }
+    if body.KeepMonthly > 0 {
+        args = append(args, "--keep-monthly", strconv.Itoa(body.KeepMonthly))
+    }
+    if body.KeepYearly > 0 {
+        args = append(args, "--keep-yearly", strconv.Itoa(body.KeepYearly))
+    }
+    if strings.TrimSpace(body.KeepWithin) != "" {
+        args = append(args, "--keep-within", body.KeepWithin)
+    }
+
+    cmd := exec.Command("restic", args...)
+    cmd.Env = env
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": string(out)})
+}
+
 // DELETE /api/servers/:server/backups/restic/repo
 func DeleteServerResticRepo(c *gin.Context) {
     serverId := c.Param("server")
