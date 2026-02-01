@@ -761,7 +761,7 @@ func runBackupWithRecovery(repo string, env []string, volumePath string, encrypt
         return string(out), nil
     }
 
-    if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) {
+    if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) && isSafeToReinitRepo(repo) {
         if reinitErr := reinitRepo(repo, encryptionKey); reinitErr == nil {
             retry := exec.Command("restic", "-r", repo, "backup", volumePath)
             retry.Env = env
@@ -796,6 +796,19 @@ func GetServerResticBackupStatus(c *gin.Context) {
     if err != nil || status.Status == "" {
         c.JSON(http.StatusOK, gin.H{"status": "idle"})
         return
+    }
+
+    if status.Status == "running" && status.StartedAt != "" {
+        if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+            if time.Since(started) > 6*time.Hour {
+                status.Status = "failed"
+                status.FinishedAt = time.Now().Format(time.RFC3339)
+                if status.Message == "" {
+                    status.Message = "Backup appears stale. Please retry."
+                }
+                writeBackupStatus(serverId, status)
+            }
+        }
     }
 
     c.JSON(http.StatusOK, status)
@@ -874,6 +887,17 @@ func isRecentRepo(repo string, window time.Duration) bool {
         return false
     }
     return time.Since(st.ModTime()) <= window
+}
+
+func isSafeToReinitRepo(repo string) bool {
+    if repo == "" {
+        return false
+    }
+    size, err := getRepoSizeBytes(repo)
+    if err != nil {
+        return false
+    }
+    return size <= 1024*1024
 }
 
 func reinitRepo(repo string, encryptionKey string) error {
