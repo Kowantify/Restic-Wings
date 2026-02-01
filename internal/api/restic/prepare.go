@@ -206,11 +206,11 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
     return nil
 }
 
-func preparedArchivePath(serverId, backupId string) string {
+func preparedArchivePath(serverId, backupId, ext string) string {
     tempDir := "/var/lib/pterodactyl/restic/temp"
     sum := sha256.Sum256([]byte(backupId))
     short := hex.EncodeToString(sum[:8])
-    return filepath.Join(tempDir, serverId+"-"+short+".tar.zst")
+    return filepath.Join(tempDir, serverId+"-"+short+ext)
 }
 
 func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerUsername string) error {
@@ -264,22 +264,37 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
         tarBase = volumeSubdir
     }
 
-    tarZstFile := preparedArchivePath(serverId, backupId)
-    if st, err := os.Stat(tarZstFile); err == nil && st.Size() > 0 {
+    useZstd := false
+    if _, err := exec.LookPath("zstd"); err == nil {
+        useZstd = true
+    }
+
+    archiveExt := ".tar.gz"
+    if useZstd {
+        archiveExt = ".tar.zst"
+    }
+
+    tarFile := preparedArchivePath(serverId, backupId, archiveExt)
+    if st, err := os.Stat(tarFile); err == nil && st.Size() > 0 {
         _ = os.RemoveAll(restoreDir)
-        prepareLog("prepare reuse server=" + serverId + " backup=" + backupId + " file=" + tarZstFile)
+        prepareLog("prepare reuse server=" + serverId + " backup=" + backupId + " file=" + tarFile)
         return nil
     }
-    _ = os.Remove(tarZstFile)
+    _ = os.Remove(tarFile)
 
     tarCtx, tarCancel := context.WithTimeout(context.Background(), 2*time.Hour)
     defer tarCancel()
-    tarCmd := exec.CommandContext(tarCtx, "tar", "-I", "zstd -3 -T0", "-cf", tarZstFile, "-C", tarBase, ".")
+    var tarCmd *exec.Cmd
+    if useZstd {
+        tarCmd = exec.CommandContext(tarCtx, "tar", "-I", "zstd -3 -T0", "-cf", tarFile, "-C", tarBase, ".")
+    } else {
+        tarCmd = exec.CommandContext(tarCtx, "tar", "-czf", tarFile, "-C", tarBase, ".")
+    }
     var tarErr bytes.Buffer
     tarCmd.Stderr = &tarErr
     if err := tarCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
-        _ = os.Remove(tarZstFile)
+        _ = os.Remove(tarFile)
         if tarCtx.Err() == context.DeadlineExceeded {
             prepareLog("archive timeout server=" + serverId + " backup=" + backupId)
             return fmt.Errorf("archive timed out")
@@ -293,6 +308,6 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
     }
 
     _ = os.RemoveAll(restoreDir)
-    prepareLog("prepare ok server=" + serverId + " backup=" + backupId + " file=" + tarZstFile)
+    prepareLog("prepare ok server=" + serverId + " backup=" + backupId + " file=" + tarFile)
     return nil
 }

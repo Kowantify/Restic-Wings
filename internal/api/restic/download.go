@@ -60,16 +60,28 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
     if len(shortId) > 8 {
         shortId = shortId[:8]
     }
-    tarZstFile := preparedArchivePath(serverId, backupId)
-    f, err := os.Open(tarZstFile)
+    tarZstFile := preparedArchivePath(serverId, backupId, ".tar.zst")
+    tarGzFile := preparedArchivePath(serverId, backupId, ".tar.gz")
+    filePath := tarZstFile
+    contentType := "application/zstd"
+    fileName := fmt.Sprintf("attachment; filename=backup-%s.tar.zst", shortId)
+    if _, err := os.Stat(tarZstFile); err != nil {
+        if _, err2 := os.Stat(tarGzFile); err2 == nil {
+            filePath = tarGzFile
+            contentType = "application/gzip"
+            fileName = fmt.Sprintf("attachment; filename=backup-%s.tar.gz", shortId)
+        }
+    }
+
+    f, err := os.Open(filePath)
     if err != nil {
-        _ = os.Remove(tarZstFile)
+        _ = os.Remove(filePath)
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file"})
         return
     }
     defer func() {
         f.Close()
-        _ = os.Remove(tarZstFile)
+        _ = os.Remove(filePath)
     }()
     if st, err := f.Stat(); err == nil {
         if st.Size() == 0 {
@@ -78,8 +90,8 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
         }
         c.Header("Content-Length", fmt.Sprintf("%d", st.Size()))
     }
-    c.Header("Content-Type", "application/zstd")
-    c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=backup-%s.tar.zst", shortId))
+    c.Header("Content-Type", contentType)
+    c.Header("Content-Disposition", fileName)
     c.Header("X-Accel-Buffering", "no")
     c.Status(200)
     io.Copy(c.Writer, f)
