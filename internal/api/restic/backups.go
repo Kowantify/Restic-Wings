@@ -591,57 +591,19 @@ func ListServerResticBackups(c *gin.Context) {
             if _, ok := snap["size"]; ok {
                 continue
             }
-            id, _ := snap["id"].(string)
-            shortID, _ := snap["short_id"].(string)
-            if shortID == "" && len(id) >= 8 {
-                shortID = id[:8]
-            }
-            if id == "" && shortID == "" {
-                continue
-            }
-
-            tryStats := func(snapshotId string, mode string) (float64, bool) {
-                if snapshotId == "" {
-                    return 0, false
-                }
-                ctxSnap, cancelSnap := context.WithTimeout(context.Background(), 30*time.Second)
-                defer cancelSnap()
-                args := []string{"-r", repo, "stats", "--json", "--no-lock", "--snapshot", snapshotId}
-                if mode != "" {
-                    args = append(args, "--mode", mode)
-                }
-                statCmd := exec.CommandContext(ctxSnap, "restic", args...)
-                statCmd.Env = env
-                statOut, statErr := statCmd.CombinedOutput()
-                if statErr != nil {
-                    return 0, false
-                }
-                var statParsed map[string]interface{}
-                if err := json.Unmarshal(statOut, &statParsed); err != nil {
-                    return 0, false
-                }
-                if v, ok := statParsed["total_size"]; ok {
+            if summary, ok := snap["summary"].(map[string]interface{}); ok {
+                if v, ok := summary["total_bytes_processed"]; ok {
                     if n, ok := extractNumber(v); ok {
-                        return n, true
+                        snap["size"] = n
+                        continue
                     }
                 }
-                return 0, false
-            }
-
-            if n, ok := tryStats(id, "raw-data"); ok {
-                snap["size"] = n
-                continue
-            }
-            if n, ok := tryStats(id, ""); ok {
-                snap["size"] = n
-                continue
-            }
-            if n, ok := tryStats(shortID, "raw-data"); ok {
-                snap["size"] = n
-                continue
-            }
-            if n, ok := tryStats(shortID, ""); ok {
-                snap["size"] = n
+                if v, ok := summary["total_bytes"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        snap["size"] = n
+                        continue
+                    }
+                }
             }
         }
     }
