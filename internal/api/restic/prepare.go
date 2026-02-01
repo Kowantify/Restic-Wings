@@ -187,10 +187,10 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
         tarBase = volumeSubdir
     }
 
-    tarFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar")
-    _ = os.Remove(tarFile)
+    tarZstFile := filepath.Join(tempDir, serverId+"-"+shortId+".tar.zst")
+    _ = os.Remove(tarZstFile)
 
-    tarCmd := exec.Command("tar", "-cf", tarFile, "-C", tarBase, ".")
+    tarCmd := exec.Command("tar", "-I", "zstd -3 -T0", "-cf", tarZstFile, "-C", tarBase, ".")
     var tarErr bytes.Buffer
     tarCmd.Stderr = &tarErr
     if err := tarCmd.Run(); err != nil {
