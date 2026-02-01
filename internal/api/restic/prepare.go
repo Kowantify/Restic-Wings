@@ -7,6 +7,7 @@ import (
     "encoding/hex"
     "encoding/json"
     "fmt"
+    "log"
     "net/http"
     "os"
     "os/exec"
@@ -135,6 +136,7 @@ func writeDownloadStatus(serverId string, backupId string, status resticDownload
 
 func prepareLog(message string) {
     line := "[" + time.Now().Format(time.RFC3339) + "] " + message + "\n"
+    log.Printf("restic prepare: %s", message)
     _ = os.MkdirAll("/var/lib/pterodactyl/restic", 0755)
     if f, err := os.OpenFile("/var/lib/pterodactyl/restic/prepare.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
         _, _ = f.WriteString(line)
