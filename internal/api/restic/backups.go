@@ -319,6 +319,11 @@ func ListServerResticBackups(c *gin.Context) {
     untilStr := c.Query("until")
     cursorStr := c.Query("cursor")
 
+    includeTotal := false
+    if rawInclude := c.Query("include_total"); rawInclude != "" {
+        includeTotal = rawInclude == "1" || strings.EqualFold(rawInclude, "true") || strings.EqualFold(rawInclude, "yes")
+    }
+
     // List snapshots (fast path when no filters/cursor)
     args := []string{"-r", repo, "snapshots", "--json", "--no-lock"}
     totalUnknown := false
@@ -570,6 +575,18 @@ func ListServerResticBackups(c *gin.Context) {
     }
     if !totalUnknown {
         response["total"] = len(filteredAll)
+    } else if includeTotal {
+        // Slow path: compute total count without changing fast page results
+        ctxCount, cancelCount := context.WithTimeout(context.Background(), 60*time.Second)
+        defer cancelCount()
+        countCmd := exec.CommandContext(ctxCount, "restic", "-r", repo, "snapshots", "--json", "--no-lock")
+        countCmd.Env = env
+        if countOut, countErr := countCmd.CombinedOutput(); countErr == nil {
+            var allSnaps []map[string]interface{}
+            if err := json.Unmarshal(countOut, &allSnaps); err == nil {
+                response["total"] = len(allSnaps)
+            }
+        }
     }
     c.JSON(http.StatusOK, response)
 }
