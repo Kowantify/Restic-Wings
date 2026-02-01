@@ -44,11 +44,7 @@ func CreateServerResticBackup(c *gin.Context) {
         return
     }
 
-    repoDir := serverId
-    if ownerUsername != "" {
-        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
-    }
-
+    repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     if err := os.MkdirAll(repo, 0755); err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir", "details": err.Error()})
@@ -232,10 +228,7 @@ func ListServerResticBackups(c *gin.Context) {
         return
     }
 
-    repoDir := serverId
-    if ownerUsername != "" {
-        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
-    }
+    repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     ensureResticKeyFile(repo, encryptionKey)
 
@@ -523,10 +516,7 @@ func GetServerResticStats(c *gin.Context) {
         return
     }
 
-    repoDir := serverId
-    if ownerUsername != "" {
-        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
-    }
+    repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
@@ -672,10 +662,7 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
         }
     }
 
-    repoDir := serverId
-    if ownerUsername != "" {
-        repoDir = fmt.Sprintf("%s+%s", serverId, ownerUsername)
-    }
+    repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
 
     if encryptionKey == "" {
@@ -684,6 +671,38 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
 
     env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
     return repo, env, nil
+}
+
+func resolveRepoDir(serverId string, ownerUsername string) string {
+    candidates := []string{}
+    if ownerUsername != "" {
+        candidates = append(candidates, fmt.Sprintf("%s+%s", serverId, ownerUsername))
+    }
+    candidates = append(candidates, serverId)
+
+    for _, dir := range candidates {
+        repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", dir)
+        if repoExists(repo) {
+            return dir
+        }
+    }
+    if ownerUsername != "" {
+        return fmt.Sprintf("%s+%s", serverId, ownerUsername)
+    }
+    return serverId
+}
+
+func repoExists(repo string) bool {
+    if repo == "" {
+        return false
+    }
+    if _, err := os.Stat(filepath.Join(repo, "config")); err == nil {
+        return true
+    }
+    if info, err := os.Stat(repo); err == nil && info.IsDir() {
+        return true
+    }
+    return false
 }
 
 func resolveSnapshotID(repo string, env []string, backupId string) string {
