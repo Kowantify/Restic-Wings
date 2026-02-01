@@ -693,13 +693,12 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
+    if repoSize, err := getRepoSizeBytes(repo); err == nil {
+        response["total_size"] = repoSize
+    }
+
     stats, err := runStats("", 30*time.Second)
     if err == nil {
-        if v, ok := stats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_uncompressed_size"] = n
-            }
-        }
         if v, ok := stats["snapshots_count"]; ok {
             if n, ok := extractNumber(v); ok {
                 response["snapshots_count"] = n
@@ -707,39 +706,79 @@ func GetServerResticStats(c *gin.Context) {
         }
     }
 
-    // Compressed on-disk size
-    if rawStats, rawErr := runStats("raw-data", 60*time.Second); rawErr == nil {
-        if v, ok := rawStats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_size"] = n
-            }
-        }
-    }
-
     includeUncompressed := c.Query("include_uncompressed") == "1"
     if includeUncompressed {
-        if restoreStats, restoreErr := runStats("restore-size", 300*time.Second); restoreErr == nil {
-            if v, ok := restoreStats["total_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_uncompressed_size"] = n
-                }
-            } else if v, ok := restoreStats["total_uncompressed_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_uncompressed_size"] = n
-                }
-            } else if v, ok := restoreStats["total_file_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_uncompressed_size"] = n
+        sum := float64(0)
+        sumOk := false
+
+        ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+        defer cancel()
+        listCmd := exec.CommandContext(ctx, "restic", "-r", repo, "snapshots", "--json", "--no-lock")
+        listCmd.Env = env
+        listOut, listErr := listCmd.CombinedOutput()
+        if ctx.Err() == context.DeadlineExceeded {
+            response["uncompressed_error"] = "snapshot listing timed out"
+        } else if listErr == nil {
+            var snaps []map[string]interface{}
+            if err := json.Unmarshal(listOut, &snaps); err == nil {
+                for _, snap := range snaps {
+                    // Prefer explicit size fields if present
+                    if v, ok := snap["size"]; ok {
+                        if n, ok := extractNumber(v); ok {
+                            sum += n
+                            sumOk = true
+                            continue
+                        }
+                    }
+                    if statsMap, ok := snap["stats"].(map[string]interface{}); ok {
+                        if v, ok := statsMap["total_size"]; ok {
+                            if n, ok := extractNumber(v); ok {
+                                sum += n
+                                sumOk = true
+                                continue
+                            }
+                        }
+                    }
+                    if summaryMap, ok := snap["summary"].(map[string]interface{}); ok {
+                        if v, ok := summaryMap["total_size"]; ok {
+                            if n, ok := extractNumber(v); ok {
+                                sum += n
+                                sumOk = true
+                                continue
+                            }
+                        }
+                        if v, ok := summaryMap["total_file_size"]; ok {
+                            if n, ok := extractNumber(v); ok {
+                                sum += n
+                                sumOk = true
+                                continue
+                            }
+                        }
+                    }
                 }
             }
-        } else {
-            response["uncompressed_error"] = restoreErr.Error()
         }
-    }
 
-    if _, ok := response["total_size"]; !ok {
-        if v, ok := response["total_uncompressed_size"]; ok {
-            response["total_size"] = v
+        if sumOk {
+            response["total_uncompressed_size"] = sum
+        } else {
+            if restoreStats, restoreErr := runStats("restore-size", 300*time.Second); restoreErr == nil {
+                if v, ok := restoreStats["total_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                    }
+                } else if v, ok := restoreStats["total_uncompressed_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                    }
+                } else if v, ok := restoreStats["total_file_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        response["total_uncompressed_size"] = n
+                    }
+                }
+            } else {
+                response["uncompressed_error"] = restoreErr.Error()
+            }
         }
     }
 
