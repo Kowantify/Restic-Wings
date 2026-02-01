@@ -803,7 +803,9 @@ func tryUnlockStaleLock(repo string, env []string, output string) bool {
     if time.Since(*createdAt) < 30*time.Minute {
         return false
     }
-    unlockCmd := exec.Command("restic", "-r", repo, "unlock")
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+    unlockCmd := exec.CommandContext(ctx, "restic", "-r", repo, "unlock")
     unlockCmd.Env = env
     if _, err := unlockCmd.CombinedOutput(); err != nil {
         return false
@@ -834,7 +836,7 @@ func runBackupWithRecovery(repo string, env []string, volumePath string, encrypt
         }
     }
 
-    if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) && isSafeToReinitRepo(repo) {
+    if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) && isSafeToReinitRepo(repo) && !repoHasLocks(repo) {
         if reinitErr := reinitRepo(repo, encryptionKey); reinitErr == nil {
             retry := exec.Command("restic", "-r", repo, "backup", volumePath)
             retry.Env = env
@@ -1401,10 +1403,12 @@ func UnlockServerResticRepo(c *gin.Context) {
     results := []map[string]interface{}{}
     for _, repo := range repos {
         if forceUnlock {
-            if forceRemoveRepoLocks(repo) {
+            if ok, reason := forceRemoveRepoLocks(repo, 1*time.Hour); ok {
                 unlocked++
                 results = append(results, map[string]interface{}{"repo": repo, "status": "forced"})
                 continue
+            } else if reason != "" {
+                results = append(results, map[string]interface{}{"repo": repo, "status": "force_skipped", "error": reason})
             } else {
                 results = append(results, map[string]interface{}{"repo": repo, "status": "force_failed"})
             }
@@ -1468,7 +1472,7 @@ func readResticKeyFromRepo(repo string) string {
     return ""
 }
 
-func forceRemoveRepoLocks(repo string) bool {
+func repoHasLocks(repo string) bool {
     if repo == "" {
         return false
     }
@@ -1477,13 +1481,34 @@ func forceRemoveRepoLocks(repo string) bool {
     if err != nil {
         return false
     }
+    return len(entries) > 0
+}
+
+func forceRemoveRepoLocks(repo string, minAge time.Duration) (bool, string) {
+    if repo == "" {
+        return false, ""
+    }
+    lockDir := filepath.Join(repo, "locks")
+    entries, err := os.ReadDir(lockDir)
+    if err != nil {
+        return false, ""
+    }
     if len(entries) == 0 {
-        return false
+        return false, "no locks"
+    }
+    for _, entry := range entries {
+        info, err := entry.Info()
+        if err != nil {
+            return false, ""
+        }
+        if time.Since(info.ModTime()) < minAge {
+            return false, "locks not stale"
+        }
     }
     for _, entry := range entries {
         _ = os.Remove(filepath.Join(lockDir, entry.Name()))
     }
-    return true
+    return true, ""
 }
 
 // DELETE /api/servers/:server/backups/restic/repo
