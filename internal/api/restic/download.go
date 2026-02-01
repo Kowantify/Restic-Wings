@@ -53,7 +53,7 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
     }
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
         return
     }
     shortId := backupId
@@ -64,7 +64,7 @@ func StreamPreparedResticBackup(c *gin.Context, s *server.Server, backupId strin
     f, err := os.Open(gzFile)
     if err != nil {
         _ = os.Remove(gzFile)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open tar file"})
         return
     }
     defer func() {

@@ -50,15 +50,19 @@ func CreateServerResticBackup(c *gin.Context) {
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     if err := os.MkdirAll(repo, 0755); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir"})
         return
     }
-    ensureResticKeyFile(repo, encryptionKey)
+    resolvedKey, err := resolveResticKey(repo, encryptionKey)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
 
-    env := buildResticEnv(encryptionKey)
+    env := buildResticEnv(resolvedKey)
 
     if _, err := exec.LookPath("restic"); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found"})
         return
     }
 
@@ -70,7 +74,7 @@ func CreateServerResticBackup(c *gin.Context) {
             if _, statErr := os.Stat(repo + "/config"); statErr == nil || strings.Contains(string(out), "already initialized") || strings.Contains(string(out), "config already exists") {
                 // repo initialized concurrently; continue
             } else {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out), "details": err.Error(), "repo": repo})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out)})
                 return
             }
         }
@@ -234,7 +238,7 @@ func CreateServerResticBackup(c *gin.Context) {
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out), "repo": repo})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out)})
         return
     }
 
@@ -267,9 +271,13 @@ func ListServerResticBackups(c *gin.Context) {
 
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
-    ensureResticKeyFile(repo, encryptionKey)
+    resolvedKey, err := resolveResticKey(repo, encryptionKey)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
 
-    env := buildResticEnv(encryptionKey)
+    env := buildResticEnv(resolvedKey)
 
     // List snapshots
     cmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
@@ -279,7 +287,7 @@ func ListServerResticBackups(c *gin.Context) {
         // If repo missing/uninitialized, initialize and return empty list
         if _, statErr := os.Stat(repo + "/config"); os.IsNotExist(statErr) {
             if _, pathErr := exec.LookPath("restic"); pathErr != nil {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found", "details": pathErr.Error()})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found"})
                 return
             }
             initCmd := exec.Command("restic", "-r", repo, "init")
@@ -293,7 +301,7 @@ func ListServerResticBackups(c *gin.Context) {
                 })
                 return
             } else {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(initOut), "details": initErr.Error(), "repo": repo})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(initOut)})
                 return
             }
         }
@@ -525,12 +533,22 @@ func ListServerResticBackups(c *gin.Context) {
     })
 }
 
-func ensureResticKeyFile(repo string, encryptionKey string) {
-    if repo == "" || encryptionKey == "" {
-        return
+func resolveResticKey(repo string, provided string) (string, error) {
+    if repo == "" {
+        return "", fmt.Errorf("missing repo")
     }
     keyPath := filepath.Join(repo, ".restic-key")
-    _ = os.WriteFile(keyPath, []byte(encryptionKey+"\n"), 0600)
+    if data, err := os.ReadFile(keyPath); err == nil {
+        stored := strings.TrimSpace(string(data))
+        if stored != "" {
+            return stored, nil
+        }
+    }
+    if provided == "" {
+        return "", fmt.Errorf("missing encryption key")
+    }
+    _ = os.WriteFile(keyPath, []byte(provided+"\n"), 0600)
+    return provided, nil
 }
 
 // GET /api/servers/:server/backups/restic/stats
@@ -560,11 +578,17 @@ func GetServerResticStats(c *gin.Context) {
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
 
-    env := buildResticEnv(encryptionKey)
+    resolvedKey, err := resolveResticKey(repo, encryptionKey)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    env := buildResticEnv(resolvedKey)
 
     if _, err := os.Stat(repo + "/config"); os.IsNotExist(err) {
         if err := os.MkdirAll(repo, 0755); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir", "details": err.Error()})
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create repo dir"})
             return
         }
         initCmd := exec.Command("restic", "-r", repo, "init")
@@ -706,11 +730,12 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
 
-    if encryptionKey == "" {
-        return "", nil, fmt.Errorf("missing encryption key")
+    resolvedKey, err := resolveResticKey(repo, encryptionKey)
+    if err != nil {
+        return "", nil, err
     }
 
-    env := buildResticEnv(encryptionKey)
+    env := buildResticEnv(resolvedKey)
     return repo, env, nil
 }
 
@@ -905,7 +930,7 @@ func DeleteServerResticRepo(c *gin.Context) {
     base := "/var/lib/pterodactyl/restic/"
     entries, err := os.ReadDir(base)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir"})
         return
     }
 
@@ -915,7 +940,7 @@ func DeleteServerResticRepo(c *gin.Context) {
         if name == serverId || strings.HasPrefix(name, serverId+"+") {
             path := base + name
             if err := os.RemoveAll(path); err != nil {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete repo", "details": err.Error()})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete repo"})
                 return
             }
             deleted++
@@ -936,7 +961,7 @@ func CheckServerResticRepo(c *gin.Context) {
     base := "/var/lib/pterodactyl/restic/"
     entries, err := os.ReadDir(base)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir"})
         return
     }
 

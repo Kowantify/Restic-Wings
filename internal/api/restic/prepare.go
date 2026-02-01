@@ -56,7 +56,7 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s+%s", serverId, ownerUsername)
     tempDir := "/var/lib/pterodactyl/restic/temp"
     if err := os.MkdirAll(tempDir, 0700); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir", "details": err.Error()})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
         return err
     }
 
@@ -76,11 +76,7 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
     restoreCmd.Stderr = &restoreErr
     if err := restoreCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
-        details := restoreErr.String()
-        if details == "" {
-            details = err.Error()
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": details})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed"})
         return err
     }
 
@@ -97,11 +93,7 @@ func PrepareServerResticBackup(c *gin.Context, s *server.Server, backupId, encry
     var tarErr bytes.Buffer
     tarCmd.Stderr = &tarErr
     if err := tarCmd.Run(); err != nil {
-        details := tarErr.String()
-        if details == "" {
-            details = err.Error()
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "tar failed", "details": details})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "tar failed"})
         return err
     }
 

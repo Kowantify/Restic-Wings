@@ -45,11 +45,7 @@ func RestoreServerResticBackupHandler(c *gin.Context) {
     var restoreErr bytes.Buffer
     cmd.Stderr = &restoreErr
     if err := cmd.Run(); err != nil {
-        details := restoreErr.String()
-        if details == "" {
-            details = err.Error()
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed", "details": details})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic restore failed"})
         return
     }
 
