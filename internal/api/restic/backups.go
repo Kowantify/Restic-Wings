@@ -7,6 +7,7 @@ import (
     "net/http"
     "os"
     "os/exec"
+    "io/fs"
     "path/filepath"
     "sort"
     "strconv"
@@ -1613,4 +1614,73 @@ func CheckServerResticRepo(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, gin.H{"exists": count > 0, "count": count})
+}
+
+func repoDiskUsageBytes(path string) (int64, error) {
+    var total int64
+    err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+        if err != nil {
+            return err
+        }
+        if d.IsDir() {
+            return nil
+        }
+        info, err := d.Info()
+        if err != nil {
+            return err
+        }
+        if info.Mode()&os.ModeSymlink != 0 {
+            return nil
+        }
+        total += info.Size()
+        return nil
+    })
+    return total, err
+}
+
+// GET /api/servers/:server/backups/restic/repo/size
+func GetServerResticRepoDiskUsage(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    base := "/var/lib/pterodactyl/restic/"
+    entries, err := os.ReadDir(base)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read repo dir"})
+        return
+    }
+
+    totalBytes := int64(0)
+    repos := make([]gin.H, 0)
+    for _, entry := range entries {
+        name := entry.Name()
+        if name != serverId && !strings.HasPrefix(name, serverId+"+") {
+            continue
+        }
+        path := filepath.Join(base, name)
+        sizeBytes, sizeErr := repoDiskUsageBytes(path)
+        if sizeErr != nil {
+            repos = append(repos, gin.H{
+                "name":  name,
+                "path":  path,
+                "error": sizeErr.Error(),
+            })
+            continue
+        }
+        totalBytes += sizeBytes
+        repos = append(repos, gin.H{
+            "name":       name,
+            "path":       path,
+            "size_bytes": sizeBytes,
+        })
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "exists":      len(repos) > 0,
+        "total_bytes": totalBytes,
+        "repos":       repos,
+    })
 }
