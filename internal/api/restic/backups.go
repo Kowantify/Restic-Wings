@@ -77,14 +77,30 @@ func CreateServerResticBackup(c *gin.Context) {
             var snapshots []map[string]interface{}
             if err := json.Unmarshal(countOut, &snapshots); err == nil {
                 if len(snapshots) >= maxBackups {
-                    // Build locked set
+                    // Build locked set (prefer tags in snapshot list; fallback to --tag when tags missing)
                     lockedIDs := map[string]bool{}
-                    lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
-                    lockCmd.Env = env
-                    if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
-                        var lockedSnapshots []map[string]interface{}
-                        if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
-                            for _, snap := range lockedSnapshots {
+                    sawTags := false
+                    hasLockedTag := func(tags interface{}) bool {
+                        switch v := tags.(type) {
+                        case []interface{}:
+                            for _, t := range v {
+                                if s, ok := t.(string); ok && s == "locked" {
+                                    return true
+                                }
+                            }
+                        case []string:
+                            for _, s := range v {
+                                if s == "locked" {
+                                    return true
+                                }
+                            }
+                        }
+                        return false
+                    }
+                    for _, snap := range snapshots {
+                        if tags, ok := snap["tags"]; ok {
+                            sawTags = true
+                            if hasLockedTag(tags) {
                                 if id, ok := snap["id"].(string); ok && id != "" {
                                     lockedIDs[id] = true
                                     if len(id) >= 8 {
@@ -93,6 +109,26 @@ func CreateServerResticBackup(c *gin.Context) {
                                 }
                                 if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
                                     lockedIDs[shortID] = true
+                                }
+                            }
+                        }
+                    }
+                    if !sawTags {
+                        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+                        lockCmd.Env = env
+                        if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
+                            var lockedSnapshots []map[string]interface{}
+                            if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
+                                for _, snap := range lockedSnapshots {
+                                    if id, ok := snap["id"].(string); ok && id != "" {
+                                        lockedIDs[id] = true
+                                        if len(id) >= 8 {
+                                            lockedIDs[id[:8]] = true
+                                        }
+                                    }
+                                    if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
+                                        lockedIDs[shortID] = true
+                                    }
                                 }
                             }
                         }
@@ -238,14 +274,30 @@ func ListServerResticBackups(c *gin.Context) {
         return
     }
 
-    // Detect locked snapshots by tag
+    // Detect locked snapshots by tags in list (fallback to --tag when tags missing)
     lockedIDs := map[string]bool{}
-    lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
-    lockCmd.Env = env
-    if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
-        var lockedSnapshots []map[string]interface{}
-        if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
-            for _, snap := range lockedSnapshots {
+    sawTags := false
+    hasLockedTag := func(tags interface{}) bool {
+        switch v := tags.(type) {
+        case []interface{}:
+            for _, t := range v {
+                if s, ok := t.(string); ok && s == "locked" {
+                    return true
+                }
+            }
+        case []string:
+            for _, s := range v {
+                if s == "locked" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+    for _, snap := range snapshots {
+        if tags, ok := snap["tags"]; ok {
+            sawTags = true
+            if hasLockedTag(tags) {
                 if id, ok := snap["id"].(string); ok && id != "" {
                     lockedIDs[id] = true
                     if len(id) >= 8 {
@@ -254,6 +306,26 @@ func ListServerResticBackups(c *gin.Context) {
                 }
                 if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
                     lockedIDs[shortID] = true
+                }
+            }
+        }
+    }
+    if !sawTags {
+        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked")
+        lockCmd.Env = env
+        if lockOut, lockErr := lockCmd.CombinedOutput(); lockErr == nil {
+            var lockedSnapshots []map[string]interface{}
+            if err := json.Unmarshal(lockOut, &lockedSnapshots); err == nil {
+                for _, snap := range lockedSnapshots {
+                    if id, ok := snap["id"].(string); ok && id != "" {
+                        lockedIDs[id] = true
+                        if len(id) >= 8 {
+                            lockedIDs[id[:8]] = true
+                        }
+                    }
+                    if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
+                        lockedIDs[shortID] = true
+                    }
                 }
             }
         }
@@ -341,7 +413,14 @@ func ListServerResticBackups(c *gin.Context) {
             shortID = id[:8]
         }
 
-        isLocked := (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID])
+        isLocked := false
+        if sawTags {
+            if tags, ok := snap["tags"]; ok {
+                isLocked = hasLockedTag(tags)
+            }
+        } else {
+            isLocked = (id != "" && lockedIDs[id]) || (shortID != "" && lockedIDs[shortID])
+        }
         if isLocked {
             if tags, ok := snap["tags"].([]interface{}); ok {
                 hasLocked := false
