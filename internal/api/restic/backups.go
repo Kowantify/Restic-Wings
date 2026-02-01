@@ -689,8 +689,13 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
-    if repoSize, err := getRepoSizeBytes(repo); err == nil {
-        response["total_size"] = repoSize
+    rawStats, rawErr := runStats("raw-data", 30*time.Second)
+    if rawErr == nil {
+        if v, ok := rawStats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_size"] = n
+            }
+        }
     }
 
     stats, err := runStats("", 30*time.Second)
