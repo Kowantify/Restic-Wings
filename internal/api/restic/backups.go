@@ -1210,45 +1210,110 @@ func PruneServerResticBackup(c *gin.Context) {
 
 // GET /api/servers/:server/backups/restic/locks
 func GetServerResticLocks(c *gin.Context) {
-    repo, env, err := resticRepoFromRequest(c)
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
         return
     }
 
-    cmd := exec.Command("restic", "-r", repo, "list", "locks", "--json")
-    cmd.Env = env
-    out, err := cmd.CombinedOutput()
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list locks"})
+    repos := listReposForServer(serverId)
+    if len(repos) == 0 {
+        c.JSON(http.StatusOK, gin.H{"repos": []map[string]interface{}{}, "locks": []map[string]interface{}{}})
         return
     }
 
-    var locks []map[string]interface{}
-    if jsonErr := json.Unmarshal(out, &locks); jsonErr != nil {
-        c.JSON(http.StatusOK, gin.H{"locks": []map[string]interface{}{}, "raw": string(out)})
-        return
+    results := make([]map[string]interface{}, 0, len(repos))
+    for _, repo := range repos {
+        key := readResticKeyFromRepo(repo)
+        env := buildResticEnv(key)
+        cmd := exec.Command("restic", "-r", repo, "list", "locks", "--json")
+        cmd.Env = env
+        out, err := cmd.CombinedOutput()
+
+        entry := map[string]interface{}{
+            "repo": repo,
+            "locked": false,
+            "locks": []map[string]interface{}{},
+        }
+
+        if err != nil {
+            entry["error"] = "failed to list locks"
+            results = append(results, entry)
+            continue
+        }
+
+        var locks []map[string]interface{}
+        if jsonErr := json.Unmarshal(out, &locks); jsonErr == nil {
+            entry["locks"] = locks
+            entry["locked"] = len(locks) > 0
+        } else {
+            entry["error"] = "invalid lock data"
+        }
+        results = append(results, entry)
     }
 
-    c.JSON(http.StatusOK, gin.H{"locks": locks})
+    c.JSON(http.StatusOK, gin.H{"repos": results})
 }
 
 // POST /api/servers/:server/backups/restic/unlock
 func UnlockServerResticRepo(c *gin.Context) {
-    repo, env, err := resticRepoFromRequest(c)
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    repos := listReposForServer(serverId)
+    if len(repos) == 0 {
+        c.JSON(http.StatusOK, gin.H{"message": "no repos found"})
+        return
+    }
+
+    unlocked := 0
+    for _, repo := range repos {
+        key := readResticKeyFromRepo(repo)
+        env := buildResticEnv(key)
+        cmd := exec.Command("restic", "-r", repo, "unlock")
+        cmd.Env = env
+        if _, err := cmd.CombinedOutput(); err == nil {
+            unlocked++
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "repo unlock attempted", "unlocked": unlocked, "total": len(repos)})
+}
+
+func listReposForServer(serverId string) []string {
+    if serverId == "" {
+        return []string{}
+    }
+    base := "/var/lib/pterodactyl/restic"
+    entries, err := os.ReadDir(base)
     if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
+        return []string{}
     }
-
-    cmd := exec.Command("restic", "-r", repo, "unlock")
-    cmd.Env = env
-    if _, err := cmd.CombinedOutput(); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock repo"})
-        return
+    repos := []string{}
+    for _, entry := range entries {
+        if !entry.IsDir() {
+            continue
+        }
+        name := entry.Name()
+        if name == serverId || strings.HasPrefix(name, serverId+"+") {
+            repos = append(repos, filepath.Join(base, name))
+        }
     }
+    return repos
+}
 
-    c.JSON(http.StatusOK, gin.H{"message": "repo unlocked"})
+func readResticKeyFromRepo(repo string) string {
+    if repo == "" {
+        return ""
+    }
+    keyPath := filepath.Join(repo, ".restic-key")
+    if data, err := os.ReadFile(keyPath); err == nil {
+        return strings.TrimSpace(string(data))
+    }
+    return ""
 }
 
 // DELETE /api/servers/:server/backups/restic/repo
