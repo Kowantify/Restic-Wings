@@ -1208,6 +1208,49 @@ func PruneServerResticBackup(c *gin.Context) {
     c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": string(out)})
 }
 
+// GET /api/servers/:server/backups/restic/locks
+func GetServerResticLocks(c *gin.Context) {
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    cmd := exec.Command("restic", "-r", repo, "list", "locks", "--json")
+    cmd.Env = env
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list locks"})
+        return
+    }
+
+    var locks []map[string]interface{}
+    if jsonErr := json.Unmarshal(out, &locks); jsonErr != nil {
+        c.JSON(http.StatusOK, gin.H{"locks": []map[string]interface{}{}, "raw": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"locks": locks})
+}
+
+// POST /api/servers/:server/backups/restic/unlock
+func UnlockServerResticRepo(c *gin.Context) {
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    cmd := exec.Command("restic", "-r", repo, "unlock")
+    cmd.Env = env
+    if _, err := cmd.CombinedOutput(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock repo"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "repo unlocked"})
+}
+
 // DELETE /api/servers/:server/backups/restic/repo
 func DeleteServerResticRepo(c *gin.Context) {
     serverId := c.Param("server")
