@@ -91,6 +91,7 @@ func Configure(m *wserver.Manager, client remote.Client) *gin.Engine {
 			// Restic backup endpoints
 			server.POST("/backups/restic", restic.CreateServerResticBackup)
 			server.GET("/backups/restic", restic.ListServerResticBackups)
+			server.GET("/backups/restic/status", restic.GetServerResticBackupStatus)
 			server.GET("/backups/restic/stats", restic.GetServerResticStats)
 			server.POST("/backups/restic/prune", restic.PruneServerResticBackup)
 			server.POST("/backups/restic/:backupId/lock", restic.LockServerResticBackup)
