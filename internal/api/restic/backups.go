@@ -1228,6 +1228,8 @@ func GetServerResticLocks(c *gin.Context) {
         return
     }
 
+    encryptionKey := c.Query("encryption_key")
+
     repos := listReposForServer(serverId)
     if len(repos) == 0 {
         c.JSON(http.StatusOK, gin.H{"repos": []map[string]interface{}{}, "locks": []map[string]interface{}{}})
@@ -1237,6 +1239,9 @@ func GetServerResticLocks(c *gin.Context) {
     results := make([]map[string]interface{}, 0, len(repos))
     for _, repo := range repos {
         key := readResticKeyFromRepo(repo)
+        if key == "" {
+            key = encryptionKey
+        }
         env := buildResticEnv(key)
         cmd := exec.Command("restic", "-r", repo, "list", "locks", "--json")
         cmd.Env = env
@@ -1297,6 +1302,7 @@ func UnlockServerResticRepo(c *gin.Context) {
 
     force := strings.ToLower(strings.TrimSpace(c.Query("force")))
     forceUnlock := force == "1" || force == "true" || force == "yes"
+    encryptionKey := c.Query("encryption_key")
 
     repos := listReposForServer(serverId)
     if len(repos) == 0 {
@@ -1313,6 +1319,9 @@ func UnlockServerResticRepo(c *gin.Context) {
             }
         }
         key := readResticKeyFromRepo(repo)
+        if key == "" {
+            key = encryptionKey
+        }
         env := buildResticEnv(key)
         cmd := exec.Command("restic", "-r", repo, "unlock")
         cmd.Env = env
@@ -1334,6 +1343,12 @@ func listReposForServer(serverId string) []string {
         return []string{}
     }
     repos := []string{}
+    if strings.Contains(serverId, "+") {
+        candidate := filepath.Join(base, serverId)
+        if repoExists(candidate) {
+            repos = append(repos, candidate)
+        }
+    }
     for _, entry := range entries {
         if !entry.IsDir() {
             continue
