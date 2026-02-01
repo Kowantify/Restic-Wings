@@ -208,7 +208,11 @@ func CreateServerResticBackup(c *gin.Context) {
                         pruneCmd := exec.Command("restic", "-r", repo, "forget", unlocked[i].ID, "--prune")
                         pruneCmd.Env = env
                         if out, err := pruneCmd.CombinedOutput(); err != nil {
-                            c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed", "output": string(out)})
+                            if isRepoLockedError(string(out)) {
+                                c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
+                                return
+                            }
+                            c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed"})
                             return
                         }
                     }
@@ -231,7 +235,11 @@ func CreateServerResticBackup(c *gin.Context) {
 
     out, err := runBackupWithRecovery(repo, env, volumePath, resolvedKey, serverId)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": out})
+        if isRepoLockedError(out) {
+            c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
+            return
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed"})
         return
     }
 
@@ -1201,6 +1209,10 @@ func PruneServerResticBackup(c *gin.Context) {
                 return
             }
         }
+        if isRepoLockedError(string(out)) {
+            c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
+            return
+        }
         c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed"})
         return
     }
@@ -1283,6 +1295,9 @@ func UnlockServerResticRepo(c *gin.Context) {
         return
     }
 
+    force := strings.ToLower(strings.TrimSpace(c.Query("force")))
+    forceUnlock := force == "1" || force == "true" || force == "yes"
+
     repos := listReposForServer(serverId)
     if len(repos) == 0 {
         c.JSON(http.StatusOK, gin.H{"message": "no repos found"})
@@ -1291,6 +1306,12 @@ func UnlockServerResticRepo(c *gin.Context) {
 
     unlocked := 0
     for _, repo := range repos {
+        if forceUnlock {
+            if forceRemoveRepoLocks(repo) {
+                unlocked++
+                continue
+            }
+        }
         key := readResticKeyFromRepo(repo)
         env := buildResticEnv(key)
         cmd := exec.Command("restic", "-r", repo, "unlock")
@@ -1300,7 +1321,7 @@ func UnlockServerResticRepo(c *gin.Context) {
         }
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "repo unlock attempted", "unlocked": unlocked, "total": len(repos)})
+    c.JSON(http.StatusOK, gin.H{"message": "repo unlock attempted", "unlocked": unlocked, "total": len(repos), "forced": forceUnlock})
 }
 
 func listReposForServer(serverId string) []string {
@@ -1334,6 +1355,21 @@ func readResticKeyFromRepo(repo string) string {
         return strings.TrimSpace(string(data))
     }
     return ""
+}
+
+func forceRemoveRepoLocks(repo string) bool {
+    if repo == "" {
+        return false
+    }
+    lockDir := filepath.Join(repo, "locks")
+    entries, err := os.ReadDir(lockDir)
+    if err != nil {
+        return false
+    }
+    for _, entry := range entries {
+        _ = os.Remove(filepath.Join(lockDir, entry.Name()))
+    }
+    return true
 }
 
 // DELETE /api/servers/:server/backups/restic/repo
