@@ -22,6 +22,7 @@ import (
 // POST /api/servers/:server/backups/restic/:backupId/prepare
 func PrepareServerResticBackupHandler(c *gin.Context) {
     backupId := c.Param("backupId")
+    log.Printf("restic prepare handler hit server=%s backup=%s", c.Param("server"), backupId)
     var body struct {
         EncryptionKey string `json:"encryption_key"`
         OwnerUsername string `json:"owner_username"`
