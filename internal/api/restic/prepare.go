@@ -130,6 +130,24 @@ func writeDownloadStatus(serverId string, backupId string, status resticDownload
     if err := os.WriteFile(tmp, data, 0644); err == nil {
         _ = os.Rename(tmp, downloadStatusPath(serverId, backupId))
     }
+    cleanupDownloadStatusDir(downloadStatusDir(), 7*24*time.Hour)
+}
+
+func cleanupDownloadStatusDir(dir string, maxAge time.Duration) {
+    entries, err := os.ReadDir(dir)
+    if err != nil {
+        return
+    }
+    now := time.Now()
+    for _, entry := range entries {
+        info, err := entry.Info()
+        if err != nil {
+            continue
+        }
+        if now.Sub(info.ModTime()) > maxAge {
+            _ = os.Remove(filepath.Join(dir, entry.Name()))
+        }
+    }
 }
 
 func setDownloadStatus(serverId string, backupId string, status string, message string) {

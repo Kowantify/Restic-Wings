@@ -303,10 +303,37 @@ func ListServerResticBackups(c *gin.Context) {
 
     env := buildResticEnv(resolvedKey)
 
-    // List snapshots
-    cmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
+    // Pagination + filtering
+    limit := 25
+    if rawLimit := c.Query("limit"); rawLimit != "" {
+        if v, err := strconv.Atoi(rawLimit); err == nil && v > 0 {
+            if v > 100 {
+                v = 100
+            }
+            limit = v
+        }
+    }
+
+    sinceStr := c.Query("since")
+    untilStr := c.Query("until")
+    cursorStr := c.Query("cursor")
+
+    // List snapshots (fast path when no filters/cursor)
+    args := []string{"-r", repo, "snapshots", "--json"}
+    totalUnknown := false
+    if sinceStr == "" && untilStr == "" && cursorStr == "" && limit > 0 {
+        args = append(args, "--latest", strconv.Itoa(limit))
+        totalUnknown = true
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+    defer cancel()
+    cmd := exec.CommandContext(ctx, "restic", args...)
     cmd.Env = env
     out, err := cmd.CombinedOutput()
+    if ctx.Err() == context.DeadlineExceeded {
+        c.JSON(http.StatusGatewayTimeout, gin.H{"error": "snapshot listing timed out"})
+        return
+    }
     if err != nil {
         // If repo missing/uninitialized, initialize and return empty list
         if _, statErr := os.Stat(repo + "/config"); os.IsNotExist(statErr) {
@@ -397,17 +424,6 @@ func ListServerResticBackups(c *gin.Context) {
         }
     }
 
-    // Pagination + filtering
-    limit := 25
-    if rawLimit := c.Query("limit"); rawLimit != "" {
-        if v, err := strconv.Atoi(rawLimit); err == nil && v > 0 {
-            if v > 100 {
-                v = 100
-            }
-            limit = v
-        }
-    }
-
     parseSnapshotTime := func(val interface{}) time.Time {
         s, _ := val.(string)
         if s == "" {
@@ -422,8 +438,6 @@ func ListServerResticBackups(c *gin.Context) {
         return time.Time{}
     }
 
-    sinceStr := c.Query("since")
-    untilStr := c.Query("until")
     var sinceTime time.Time
     var untilTime time.Time
     var sinceOk bool
@@ -453,7 +467,6 @@ func ListServerResticBackups(c *gin.Context) {
         }
     }
 
-    cursorStr := c.Query("cursor")
     var cursorTime time.Time
     var cursorOk bool
     if cursorStr != "" {
@@ -549,12 +562,15 @@ func ListServerResticBackups(c *gin.Context) {
         }
     }
 
-    c.JSON(http.StatusOK, gin.H{
+    response := gin.H{
         "backups":     page,
         "next_cursor": nextCursor,
         "limit":       limit,
-        "total":       len(filteredAll),
-    })
+    }
+    if !totalUnknown {
+        response["total"] = len(filteredAll)
+    }
+    c.JSON(http.StatusOK, response)
 }
 
 func resolveResticKey(repo string, provided string) (string, error) {
@@ -921,6 +937,24 @@ func writeBackupStatus(serverId string, status resticBackupStatus) {
     tmp := statusPath(serverId) + ".tmp"
     if err := os.WriteFile(tmp, data, 0644); err == nil {
         _ = os.Rename(tmp, statusPath(serverId))
+    }
+    cleanupStatusDir(statusDir(), 7*24*time.Hour)
+}
+
+func cleanupStatusDir(dir string, maxAge time.Duration) {
+    entries, err := os.ReadDir(dir)
+    if err != nil {
+        return
+    }
+    now := time.Now()
+    for _, entry := range entries {
+        info, err := entry.Info()
+        if err != nil {
+            continue
+        }
+        if now.Sub(info.ModTime()) > maxAge {
+            _ = os.Remove(filepath.Join(dir, entry.Name()))
+        }
     }
 }
 
