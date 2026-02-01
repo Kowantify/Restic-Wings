@@ -568,19 +568,38 @@ func ListServerResticBackups(c *gin.Context) {
             if id == "" {
                 continue
             }
-            ctxSnap, cancelSnap := context.WithTimeout(context.Background(), 30*time.Second)
-            defer cancelSnap()
-            statCmd := exec.CommandContext(ctxSnap, "restic", "-r", repo, "stats", "--json", "--mode", "raw-data", "--snapshot", id, "--no-lock")
-            statCmd.Env = env
-            if statOut, statErr := statCmd.CombinedOutput(); statErr == nil {
+
+            tryStats := func(mode string) (float64, bool) {
+                ctxSnap, cancelSnap := context.WithTimeout(context.Background(), 30*time.Second)
+                defer cancelSnap()
+                args := []string{"-r", repo, "stats", "--json", "--no-lock", "--snapshot", id}
+                if mode != "" {
+                    args = append(args, "--mode", mode)
+                }
+                statCmd := exec.CommandContext(ctxSnap, "restic", args...)
+                statCmd.Env = env
+                statOut, statErr := statCmd.CombinedOutput()
+                if statErr != nil {
+                    return 0, false
+                }
                 var statParsed map[string]interface{}
-                if err := json.Unmarshal(statOut, &statParsed); err == nil {
-                    if v, ok := statParsed["total_size"]; ok {
-                        if n, ok := extractNumber(v); ok {
-                            snap["size"] = n
-                        }
+                if err := json.Unmarshal(statOut, &statParsed); err != nil {
+                    return 0, false
+                }
+                if v, ok := statParsed["total_size"]; ok {
+                    if n, ok := extractNumber(v); ok {
+                        return n, true
                     }
                 }
+                return 0, false
+            }
+
+            if n, ok := tryStats("raw-data"); ok {
+                snap["size"] = n
+                continue
+            }
+            if n, ok := tryStats(""); ok {
+                snap["size"] = n
             }
         }
     }
