@@ -52,7 +52,7 @@ func CreateServerResticBackup(c *gin.Context) {
     }
     ensureResticKeyFile(repo, encryptionKey)
 
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+    env := buildResticEnv(encryptionKey)
 
     // Init repo if needed
     if _, err := os.Stat(repo + "/config"); os.IsNotExist(err) {
@@ -232,7 +232,7 @@ func ListServerResticBackups(c *gin.Context) {
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     ensureResticKeyFile(repo, encryptionKey)
 
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+    env := buildResticEnv(encryptionKey)
 
     // List snapshots
     cmd := exec.Command("restic", "-r", repo, "snapshots", "--json")
@@ -519,7 +519,7 @@ func GetServerResticStats(c *gin.Context) {
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
 
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+    env := buildResticEnv(encryptionKey)
 
     if _, err := os.Stat(repo + "/config"); os.IsNotExist(err) {
         if err := os.MkdirAll(repo, 0755); err != nil {
@@ -669,8 +669,21 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
         return "", nil, fmt.Errorf("missing encryption key")
     }
 
-    env := append(os.Environ(), "RESTIC_PASSWORD="+encryptionKey)
+    env := buildResticEnv(encryptionKey)
     return repo, env, nil
+}
+
+func buildResticEnv(encryptionKey string) []string {
+    base := os.Environ()
+    filtered := make([]string, 0, len(base)+1)
+    for _, v := range base {
+        if strings.HasPrefix(v, "RESTIC_PASSWORD=") || strings.HasPrefix(v, "RESTIC_PASSWORD_FILE=") {
+            continue
+        }
+        filtered = append(filtered, v)
+    }
+    filtered = append(filtered, "RESTIC_PASSWORD="+encryptionKey)
+    return filtered
 }
 
 func resolveRepoDir(serverId string, ownerUsername string) string {
