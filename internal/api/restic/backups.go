@@ -1,6 +1,7 @@
 package restic
 
 import (
+    "context"
     "encoding/json"
     "fmt"
     "net/http"
@@ -625,13 +626,18 @@ func GetServerResticStats(c *gin.Context) {
     }
 
     runStats := func(mode string) (map[string]interface{}, error) {
-        args := []string{"-r", repo, "stats", "--json"}
+        args := []string{"-r", repo, "stats", "--json", "--no-lock"}
         if mode != "" {
             args = append(args, "--mode", mode)
         }
-        cmd := exec.Command("restic", args...)
+        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+        cmd := exec.CommandContext(ctx, "restic", args...)
         cmd.Env = env
         out, err := cmd.CombinedOutput()
+        if ctx.Err() == context.DeadlineExceeded {
+            return nil, fmt.Errorf("stats timed out")
+        }
         if err != nil {
             return nil, fmt.Errorf("%s", string(out))
         }
