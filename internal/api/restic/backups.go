@@ -209,6 +209,7 @@ func CreateServerResticBackup(c *gin.Context) {
                         pruneCmd.Env = env
                         if out, err := pruneCmd.CombinedOutput(); err != nil {
                             if isRepoLockedError(string(out)) {
+                                setBackupStatus(serverId, "failed", "Repository is busy. Please try again later.")
                                 c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
                                 return
                             }
@@ -236,6 +237,7 @@ func CreateServerResticBackup(c *gin.Context) {
     out, err := runBackupWithRecovery(repo, env, volumePath, resolvedKey, serverId)
     if err != nil {
         if isRepoLockedError(out) {
+            setBackupStatus(serverId, "failed", "Repository is busy. Please try again later.")
             c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
             return
         }
@@ -1229,6 +1231,20 @@ func GetServerResticLocks(c *gin.Context) {
     }
 
     encryptionKey := c.Query("encryption_key")
+    if encryptionKey == "" {
+        var body struct {
+            EncryptionKey string `json:"encryption_key"`
+        }
+        _ = c.ShouldBindJSON(&body)
+        encryptionKey = body.EncryptionKey
+    }
+    if encryptionKey == "" {
+        var body struct {
+            EncryptionKey string `json:"encryption_key"`
+        }
+        _ = c.ShouldBindJSON(&body)
+        encryptionKey = body.EncryptionKey
+    }
 
     repos := listReposForServer(serverId)
     if len(repos) == 0 {
@@ -1264,7 +1280,12 @@ func GetServerResticLocks(c *gin.Context) {
             entry["locks"] = locks
             entry["locked"] = len(locks) > 0
         } else {
-            entry["error"] = "invalid lock data"
+            fallbackLocks := parseResticLockOutput(string(out))
+            entry["locks"] = fallbackLocks
+            entry["locked"] = len(fallbackLocks) > 0
+            if len(fallbackLocks) == 0 {
+                entry["error"] = "invalid lock data"
+            }
         }
         results = append(results, entry)
     }
@@ -1302,6 +1323,26 @@ func parseResticJSONLines(out []byte) ([]map[string]interface{}, error) {
     return items, nil
 }
 
+func parseResticLockOutput(output string) []map[string]interface{} {
+    out := strings.TrimSpace(output)
+    if out == "" {
+        return []map[string]interface{}{}
+    }
+    lower := strings.ToLower(out)
+    if strings.Contains(lower, "no locks") || strings.Contains(lower, "no lock") {
+        return []map[string]interface{}{}
+    }
+    if strings.Contains(lower, "repository is already locked") || strings.Contains(lower, "lock was created at") {
+        lock := map[string]interface{}{}
+        if t := parseLockCreatedAt(out); t != nil {
+            lock["created_at"] = t.Format(time.RFC3339)
+        }
+        lock["raw"] = "locked"
+        return []map[string]interface{}{lock}
+    }
+    return []map[string]interface{}{}
+}
+
 // POST /api/servers/:server/backups/restic/unlock
 func UnlockServerResticRepo(c *gin.Context) {
     serverId := c.Param("server")
@@ -1321,11 +1362,15 @@ func UnlockServerResticRepo(c *gin.Context) {
     }
 
     unlocked := 0
+    results := []map[string]interface{}{}
     for _, repo := range repos {
         if forceUnlock {
             if forceRemoveRepoLocks(repo) {
                 unlocked++
+                results = append(results, map[string]interface{}{"repo": repo, "status": "forced"})
                 continue
+            } else {
+                results = append(results, map[string]interface{}{"repo": repo, "status": "force_failed"})
             }
         }
         key := readResticKeyFromRepo(repo)
@@ -1337,10 +1382,13 @@ func UnlockServerResticRepo(c *gin.Context) {
         cmd.Env = env
         if _, err := cmd.CombinedOutput(); err == nil {
             unlocked++
+            results = append(results, map[string]interface{}{"repo": repo, "status": "unlocked"})
+        } else if !forceUnlock {
+            results = append(results, map[string]interface{}{"repo": repo, "status": "unlock_failed"})
         }
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "repo unlock attempted", "unlocked": unlocked, "total": len(repos), "forced": forceUnlock})
+    c.JSON(http.StatusOK, gin.H{"message": "repo unlock attempted", "unlocked": unlocked, "total": len(repos), "forced": forceUnlock, "results": results})
 }
 
 func listReposForServer(serverId string) []string {
@@ -1389,6 +1437,9 @@ func forceRemoveRepoLocks(repo string) bool {
     lockDir := filepath.Join(repo, "locks")
     entries, err := os.ReadDir(lockDir)
     if err != nil {
+        return false
+    }
+    if len(entries) == 0 {
         return false
     }
     for _, entry := range entries {
