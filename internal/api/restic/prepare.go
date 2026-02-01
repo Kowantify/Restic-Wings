@@ -133,6 +133,15 @@ func writeDownloadStatus(serverId string, backupId string, status resticDownload
     cleanupDownloadStatusDir(downloadStatusDir(), 7*24*time.Hour)
 }
 
+func prepareLog(message string) {
+    line := "[" + time.Now().Format(time.RFC3339) + "] " + message + "\n"
+    _ = os.MkdirAll("/var/lib/pterodactyl/restic", 0755)
+    if f, err := os.OpenFile("/var/lib/pterodactyl/restic/prepare.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+        _, _ = f.WriteString(line)
+        _ = f.Close()
+    }
+}
+
 func cleanupDownloadStatusDir(dir string, maxAge time.Duration) {
     entries, err := os.ReadDir(dir)
     if err != nil {
@@ -209,6 +218,8 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
         return fmt.Errorf("missing encryption_key or owner_username")
     }
 
+    prepareLog("prepare start server=" + serverId + " backup=" + backupId)
+
     repoDir := resolveRepoDir(serverId, ownerUsername)
     repo := fmt.Sprintf("/var/lib/pterodactyl/restic/%s", repoDir)
     tempDir := "/var/lib/pterodactyl/restic/temp"
@@ -233,12 +244,14 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
     if err := restoreCmd.Run(); err != nil {
         _ = os.RemoveAll(restoreDir)
         if restoreCtx.Err() == context.DeadlineExceeded {
+            prepareLog("restore timeout server=" + serverId + " backup=" + backupId)
             return fmt.Errorf("restore timed out")
         }
         detail := strings.TrimSpace(restoreErr.String())
         if detail == "" {
             detail = err.Error()
         }
+        prepareLog("restore failed server=" + serverId + " backup=" + backupId + " error=" + detail)
         return fmt.Errorf("restic restore failed: %s", detail)
     }
 
@@ -251,6 +264,7 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
     tarZstFile := preparedArchivePath(serverId, backupId)
     if st, err := os.Stat(tarZstFile); err == nil && st.Size() > 0 {
         _ = os.RemoveAll(restoreDir)
+        prepareLog("prepare reuse server=" + serverId + " backup=" + backupId + " file=" + tarZstFile)
         return nil
     }
     _ = os.Remove(tarZstFile)
@@ -264,15 +278,18 @@ func prepareServerResticBackupInternal(serverId, backupId, encryptionKey, ownerU
         _ = os.RemoveAll(restoreDir)
         _ = os.Remove(tarZstFile)
         if tarCtx.Err() == context.DeadlineExceeded {
+            prepareLog("archive timeout server=" + serverId + " backup=" + backupId)
             return fmt.Errorf("archive timed out")
         }
         detail := strings.TrimSpace(tarErr.String())
         if detail == "" {
             detail = err.Error()
         }
+        prepareLog("archive failed server=" + serverId + " backup=" + backupId + " error=" + detail)
         return fmt.Errorf("archive failed: %s", detail)
     }
 
     _ = os.RemoveAll(restoreDir)
+    prepareLog("prepare ok server=" + serverId + " backup=" + backupId + " file=" + tarZstFile)
     return nil
 }
