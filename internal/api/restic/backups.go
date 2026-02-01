@@ -1273,10 +1273,20 @@ func GetServerResticLocks(c *gin.Context) {
 }
 
 func parseResticJSONLines(out []byte) ([]map[string]interface{}, error) {
-    lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-    if len(lines) == 0 || lines[0] == "" {
+    trimmed := strings.TrimSpace(string(out))
+    if trimmed == "" {
         return []map[string]interface{}{}, nil
     }
+
+    if strings.HasPrefix(trimmed, "[") {
+        var arr []map[string]interface{}
+        if err := json.Unmarshal([]byte(trimmed), &arr); err != nil {
+            return nil, err
+        }
+        return arr, nil
+    }
+
+    lines := strings.Split(trimmed, "\n")
     items := make([]map[string]interface{}, 0, len(lines))
     for _, line := range lines {
         line = strings.TrimSpace(line)
