@@ -218,27 +218,22 @@ func CreateServerResticBackup(c *gin.Context) {
     }
 
     volumePath := fmt.Sprintf("/var/lib/pterodactyl/volumes/%s", serverId)
-    cmd := exec.Command("restic", "-r", repo, "backup", volumePath)
-    cmd.Env = env
-    out, err := cmd.CombinedOutput()
-    if err != nil {
-        if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) {
-            if reinitErr := reinitRepo(repo, resolvedKey); reinitErr == nil {
-                retry := exec.Command("restic", "-r", repo, "backup", volumePath)
-                retry.Env = env
-                retryOut, retryErr := retry.CombinedOutput()
-                if retryErr == nil {
-                    c.JSON(http.StatusOK, gin.H{"message": "backup created", "output": string(retryOut)})
-                    return
-                }
-                out = retryOut
-            }
-        }
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out)})
+    asyncParam := strings.ToLower(strings.TrimSpace(c.Query("async")))
+    async := asyncParam == "1" || asyncParam == "true" || asyncParam == "yes"
+
+    if async {
+        go runBackupWithRecovery(repo, env, volumePath, resolvedKey)
+        c.JSON(http.StatusAccepted, gin.H{"message": "backup started"})
         return
     }
 
-    c.JSON(http.StatusOK, gin.H{"message": "backup created", "output": string(out)})
+    out, err := runBackupWithRecovery(repo, env, volumePath, resolvedKey)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": out})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "backup created", "output": out})
 }
 
 // GET /api/servers/:server/backups/restic
@@ -753,6 +748,29 @@ func isKeyMismatchError(output string) bool {
     return strings.Contains(lower, "ciphertext verification failed") ||
         strings.Contains(lower, "wrong password") ||
         strings.Contains(lower, "config or key")
+}
+
+func runBackupWithRecovery(repo string, env []string, volumePath string, encryptionKey string) (string, error) {
+    cmd := exec.Command("restic", "-r", repo, "backup", volumePath)
+    cmd.Env = env
+    out, err := cmd.CombinedOutput()
+    if err == nil {
+        return string(out), nil
+    }
+
+    if isKeyMismatchError(string(out)) && isRecentRepo(repo, 2*time.Minute) {
+        if reinitErr := reinitRepo(repo, encryptionKey); reinitErr == nil {
+            retry := exec.Command("restic", "-r", repo, "backup", volumePath)
+            retry.Env = env
+            retryOut, retryErr := retry.CombinedOutput()
+            if retryErr == nil {
+                return string(retryOut), nil
+            }
+            return string(retryOut), retryErr
+        }
+    }
+
+    return string(out), err
 }
 
 func isRecentRepo(repo string, window time.Duration) bool {
