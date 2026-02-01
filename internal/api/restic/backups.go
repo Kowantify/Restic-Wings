@@ -765,6 +765,19 @@ func resolveRepoDir(serverId string, ownerUsername string) string {
             return dir
         }
     }
+
+    base := "/var/lib/pterodactyl/restic"
+    if entries, err := os.ReadDir(base); err == nil {
+        for _, entry := range entries {
+            if !entry.IsDir() {
+                continue
+            }
+            name := entry.Name()
+            if strings.HasPrefix(name, serverId+"+") {
+                return name
+            }
+        }
+    }
     if ownerUsername != "" {
         return fmt.Sprintf("%s+%s", serverId, ownerUsername)
     }
