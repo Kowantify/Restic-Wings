@@ -558,6 +558,33 @@ func ListServerResticBackups(c *gin.Context) {
         page = append(page, item.Raw)
     }
 
+    // Fill snapshot size for the current page when missing (best-effort)
+    if len(page) > 0 {
+        for _, snap := range page {
+            if _, ok := snap["size"]; ok {
+                continue
+            }
+            id, _ := snap["id"].(string)
+            if id == "" {
+                continue
+            }
+            ctxSnap, cancelSnap := context.WithTimeout(context.Background(), 30*time.Second)
+            defer cancelSnap()
+            statCmd := exec.CommandContext(ctxSnap, "restic", "-r", repo, "stats", "--json", "--mode", "raw-data", "--snapshot", id, "--no-lock")
+            statCmd.Env = env
+            if statOut, statErr := statCmd.CombinedOutput(); statErr == nil {
+                var statParsed map[string]interface{}
+                if err := json.Unmarshal(statOut, &statParsed); err == nil {
+                    if v, ok := statParsed["total_size"]; ok {
+                        if n, ok := extractNumber(v); ok {
+                            snap["size"] = n
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     var nextCursor string
     if len(filtered) > limit {
         last := page[len(page)-1]
