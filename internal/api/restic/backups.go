@@ -1285,6 +1285,138 @@ func UnlockServerResticBackup(c *gin.Context) {
     c.JSON(http.StatusOK, gin.H{"message": "unlocked", "locked": false})
 }
 
+// DELETE /api/servers/:server/backups/restic/:backupId
+func DeleteServerResticBackup(c *gin.Context) {
+    backupId := c.Param("backupId")
+    if backupId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup id"})
+        return
+    }
+
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    resolvedId := resolveSnapshotID(repo, env, backupId)
+    if resolvedId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid backup id"})
+        return
+    }
+
+    isLocked := func() (bool, error) {
+        listCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--no-lock")
+        listCmd.Env = env
+        out, err := listCmd.CombinedOutput()
+        if err != nil {
+            return false, err
+        }
+        var snapshots []map[string]interface{}
+        if err := json.Unmarshal(out, &snapshots); err != nil {
+            return false, err
+        }
+
+        hasLockedTag := func(tags interface{}) bool {
+            switch v := tags.(type) {
+            case []interface{}:
+                for _, t := range v {
+                    if s, ok := t.(string); ok && s == "locked" {
+                        return true
+                    }
+                }
+            case []string:
+                for _, s := range v {
+                    if s == "locked" {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        sawTags := false
+        for _, snap := range snapshots {
+            id, _ := snap["id"].(string)
+            shortID, _ := snap["short_id"].(string)
+            match := id == resolvedId || (shortID != "" && shortID == resolvedId) || (len(id) >= 8 && id[:8] == resolvedId)
+            if !match {
+                continue
+            }
+            if tags, ok := snap["tags"]; ok {
+                sawTags = true
+                if hasLockedTag(tags) {
+                    return true, nil
+                }
+            }
+            if sawTags {
+                return false, nil
+            }
+        }
+
+        // Fallback when tags are missing: query locked snapshots
+        lockCmd := exec.Command("restic", "-r", repo, "snapshots", "--json", "--tag", "locked", "--no-lock")
+        lockCmd.Env = env
+        lockOut, lockErr := lockCmd.CombinedOutput()
+        if lockErr != nil {
+            return false, lockErr
+        }
+        var lockedSnapshots []map[string]interface{}
+        if err := json.Unmarshal(lockOut, &lockedSnapshots); err != nil {
+            return false, err
+        }
+        for _, snap := range lockedSnapshots {
+            if id, ok := snap["id"].(string); ok && id != "" {
+                if id == resolvedId || (len(id) >= 8 && id[:8] == resolvedId) {
+                    return true, nil
+                }
+            }
+            if shortID, ok := snap["short_id"].(string); ok && shortID != "" {
+                if shortID == resolvedId {
+                    return true, nil
+                }
+            }
+        }
+        return false, nil
+    }
+
+    locked, lockErr := isLocked()
+    if lockErr != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check lock status"})
+        return
+    }
+    if locked {
+        c.JSON(http.StatusConflict, gin.H{"error": "snapshot is locked"})
+        return
+    }
+
+    cmd := exec.Command("restic", "-r", repo, "forget", resolvedId, "--prune")
+    cmd.Env = env
+    out, err := cmd.CombinedOutput()
+    if err != nil {
+        if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
+            retry := exec.Command("restic", "-r", repo, "forget", resolvedId, "--prune")
+            retry.Env = env
+            if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+                c.JSON(http.StatusOK, gin.H{"message": "snapshot deleted", "output": string(retryOut)})
+                return
+            } else {
+                out = retryOut
+                err = retryErr
+            }
+        }
+        lower := strings.ToLower(string(out))
+        if strings.Contains(lower, "snapshot") && strings.Contains(lower, "not found") {
+            c.JSON(http.StatusNotFound, gin.H{"error": "snapshot not found"})
+            return
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete snapshot", "output": string(out)})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "snapshot deleted"})
+}
+
 // POST /api/servers/:server/backups/restic/prune
 func PruneServerResticBackup(c *gin.Context) {
     repo, env, err := resticRepoFromRequest(c)
