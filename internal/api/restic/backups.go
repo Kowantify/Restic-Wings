@@ -648,15 +648,6 @@ func GetServerResticStats(c *gin.Context) {
         return parsed, nil
     }
 
-    stats, err := runStats("")
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get stats", "output": err.Error()})
-        return
-    }
-
-    rawStats, rawErr := runStats("raw-data")
-    restoreStats, restoreErr := runStats("restore-size")
-
     var extractNumber func(interface{}) (float64, bool)
     extractNumber = func(val interface{}) (float64, bool) {
         switch t := val.(type) {
@@ -682,31 +673,20 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
-    // Compressed/encrypted on disk: prefer raw-data total_size
-    if rawErr == nil {
-        if v, ok := rawStats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_size"] = n
-            }
-        }
-    }
-    if _, ok := response["total_size"]; !ok {
-        if v, ok := stats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_size"] = n
-            }
-        }
+    if repoSize, err := getRepoSizeBytes(repo); err == nil {
+        response["total_size"] = repoSize
     }
 
-    // Uncompressed/restore size: prefer restore-size total_size
-    if restoreErr == nil {
-        if v, ok := restoreStats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_uncompressed_size"] = n
+    stats, err := runStats("")
+    if err == nil {
+        if _, ok := response["total_size"]; !ok {
+            if v, ok := stats["total_size"]; ok {
+                if n, ok := extractNumber(v); ok {
+                    response["total_size"] = n
+                }
             }
         }
-    }
-    if _, ok := response["total_uncompressed_size"]; !ok {
+
         if v, ok := stats["total_uncompressed_size"]; ok {
             if n, ok := extractNumber(v); ok {
                 response["total_uncompressed_size"] = n
@@ -716,11 +696,11 @@ func GetServerResticStats(c *gin.Context) {
                 response["total_uncompressed_size"] = n
             }
         }
-    }
 
-    if v, ok := stats["snapshots_count"]; ok {
-        if n, ok := extractNumber(v); ok {
-            response["snapshots_count"] = n
+        if v, ok := stats["snapshots_count"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["snapshots_count"] = n
+            }
         }
     }
 
