@@ -221,13 +221,15 @@ func CreateServerResticBackup(c *gin.Context) {
     asyncParam := strings.ToLower(strings.TrimSpace(c.Query("async")))
     async := asyncParam == "1" || asyncParam == "true" || asyncParam == "yes"
 
+    setBackupStatus(serverId, "running", "")
+
     if async {
-        go runBackupWithRecovery(repo, env, volumePath, resolvedKey)
+        go runBackupWithRecovery(repo, env, volumePath, resolvedKey, serverId)
         c.JSON(http.StatusAccepted, gin.H{"message": "backup started"})
         return
     }
 
-    out, err := runBackupWithRecovery(repo, env, volumePath, resolvedKey)
+    out, err := runBackupWithRecovery(repo, env, volumePath, resolvedKey, serverId)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": out})
         return
@@ -750,11 +752,12 @@ func isKeyMismatchError(output string) bool {
         strings.Contains(lower, "config or key")
 }
 
-func runBackupWithRecovery(repo string, env []string, volumePath string, encryptionKey string) (string, error) {
+func runBackupWithRecovery(repo string, env []string, volumePath string, encryptionKey string, serverId string) (string, error) {
     cmd := exec.Command("restic", "-r", repo, "backup", volumePath)
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err == nil {
+        setBackupStatus(serverId, "completed", "")
         return string(out), nil
     }
 
@@ -764,13 +767,105 @@ func runBackupWithRecovery(repo string, env []string, volumePath string, encrypt
             retry.Env = env
             retryOut, retryErr := retry.CombinedOutput()
             if retryErr == nil {
+                setBackupStatus(serverId, "completed", "")
                 return string(retryOut), nil
             }
+            setBackupStatus(serverId, "failed", truncateStatusMessage(string(retryOut)))
             return string(retryOut), retryErr
         }
     }
-
+    setBackupStatus(serverId, "failed", truncateStatusMessage(string(out)))
     return string(out), err
+}
+
+type resticBackupStatus struct {
+    Status     string `json:"status"`
+    StartedAt  string `json:"started_at,omitempty"`
+    FinishedAt string `json:"finished_at,omitempty"`
+    Message    string `json:"message,omitempty"`
+}
+
+func GetServerResticBackupStatus(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    status, err := readBackupStatus(serverId)
+    if err != nil || status.Status == "" {
+        c.JSON(http.StatusOK, gin.H{"status": "idle"})
+        return
+    }
+
+    c.JSON(http.StatusOK, status)
+}
+
+func statusDir() string {
+    return "/var/lib/pterodactyl/restic/.status"
+}
+
+func statusPath(serverId string) string {
+    return filepath.Join(statusDir(), serverId+".json")
+}
+
+func readBackupStatus(serverId string) (resticBackupStatus, error) {
+    var status resticBackupStatus
+    data, err := os.ReadFile(statusPath(serverId))
+    if err != nil {
+        return status, err
+    }
+    if err := json.Unmarshal(data, &status); err != nil {
+        return resticBackupStatus{}, err
+    }
+    return status, nil
+}
+
+func writeBackupStatus(serverId string, status resticBackupStatus) {
+    if serverId == "" {
+        return
+    }
+    _ = os.MkdirAll(statusDir(), 0755)
+    data, err := json.Marshal(status)
+    if err != nil {
+        return
+    }
+    tmp := statusPath(serverId) + ".tmp"
+    if err := os.WriteFile(tmp, data, 0644); err == nil {
+        _ = os.Rename(tmp, statusPath(serverId))
+    }
+}
+
+func setBackupStatus(serverId string, status string, message string) {
+    if serverId == "" {
+        return
+    }
+    current, _ := readBackupStatus(serverId)
+    next := resticBackupStatus{
+        Status: status,
+    }
+    if current.StartedAt != "" {
+        next.StartedAt = current.StartedAt
+    }
+    if status == "running" && next.StartedAt == "" {
+        next.StartedAt = time.Now().Format(time.RFC3339)
+    }
+    if status == "completed" || status == "failed" {
+        next.FinishedAt = time.Now().Format(time.RFC3339)
+    }
+    if message != "" {
+        next.Message = message
+    }
+    writeBackupStatus(serverId, next)
+}
+
+func truncateStatusMessage(msg string) string {
+    const max = 2000
+    trimmed := strings.TrimSpace(msg)
+    if len(trimmed) <= max {
+        return trimmed
+    }
+    return trimmed[:max]
 }
 
 func isRecentRepo(repo string, window time.Duration) bool {
