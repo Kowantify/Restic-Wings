@@ -677,6 +677,10 @@ func GetServerResticStats(c *gin.Context) {
             return float64(t), true
         case int64:
             return float64(t), true
+        case string:
+            if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil {
+                return f, true
+            }
         case json.Number:
             if f, err := t.Float64(); err == nil {
                 return f, true
