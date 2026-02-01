@@ -1405,11 +1405,13 @@ func UnlockServerResticRepo(c *gin.Context) {
         env := buildResticEnv(key)
         cmd := exec.Command("restic", "-r", repo, "unlock")
         cmd.Env = env
-        if _, err := cmd.CombinedOutput(); err == nil {
+        if out, err := cmd.CombinedOutput(); err == nil {
             unlocked++
             results = append(results, map[string]interface{}{"repo": repo, "status": "unlocked"})
         } else if !forceUnlock {
-            results = append(results, map[string]interface{}{"repo": repo, "status": "unlock_failed"})
+            results = append(results, map[string]interface{}{"repo": repo, "status": "unlock_failed", "error": strings.TrimSpace(string(out))})
+        } else {
+            results = append(results, map[string]interface{}{"repo": repo, "status": "unlock_failed", "error": strings.TrimSpace(string(out))})
         }
     }
 
