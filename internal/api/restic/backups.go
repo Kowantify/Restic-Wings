@@ -57,6 +57,11 @@ func CreateServerResticBackup(c *gin.Context) {
 
     env := buildResticEnv(encryptionKey)
 
+    if _, err := exec.LookPath("restic"); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found", "details": err.Error()})
+        return
+    }
+
     // Init repo if needed
     if _, err := os.Stat(repo + "/config"); os.IsNotExist(err) {
         initCmd := exec.Command("restic", "-r", repo, "init")
@@ -65,7 +70,7 @@ func CreateServerResticBackup(c *gin.Context) {
             if _, statErr := os.Stat(repo + "/config"); statErr == nil || strings.Contains(string(out), "already initialized") || strings.Contains(string(out), "config already exists") {
                 // repo initialized concurrently; continue
             } else {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out), "repo": repo})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out), "details": err.Error(), "repo": repo})
                 return
             }
         }
@@ -273,6 +278,10 @@ func ListServerResticBackups(c *gin.Context) {
     if err != nil {
         // If repo missing/uninitialized, initialize and return empty list
         if _, statErr := os.Stat(repo + "/config"); os.IsNotExist(statErr) {
+            if _, pathErr := exec.LookPath("restic"); pathErr != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "restic not found", "details": pathErr.Error()})
+                return
+            }
             initCmd := exec.Command("restic", "-r", repo, "init")
             initCmd.Env = env
             if initOut, initErr := initCmd.CombinedOutput(); initErr == nil {
@@ -284,7 +293,7 @@ func ListServerResticBackups(c *gin.Context) {
                 })
                 return
             } else {
-                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(initOut)})
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(initOut), "details": initErr.Error(), "repo": repo})
                 return
             }
         }
