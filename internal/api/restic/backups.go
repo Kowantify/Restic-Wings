@@ -229,7 +229,7 @@ func CreateServerResticBackup(c *gin.Context) {
     cmd.Env = env
     out, err := cmd.CombinedOutput()
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out)})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "backup failed", "output": string(out), "repo": repo})
         return
     }
 
