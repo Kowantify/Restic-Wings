@@ -921,20 +921,25 @@ func setBackupStatus(serverId string, status string, message string) {
         return
     }
     current, _ := readBackupStatus(serverId)
-    next := resticBackupStatus{
-        Status: status,
-    }
-    if current.StartedAt != "" {
-        next.StartedAt = current.StartedAt
-    }
-    if status == "running" && next.StartedAt == "" {
+    next := resticBackupStatus{Status: status}
+
+    if status == "running" {
+        // Always reset start time for a new run
         next.StartedAt = time.Now().Format(time.RFC3339)
-    }
-    if status == "completed" || status == "failed" {
-        next.FinishedAt = time.Now().Format(time.RFC3339)
-    }
-    if message != "" {
-        next.Message = message
+        next.FinishedAt = ""
+        next.Message = ""
+    } else {
+        if current.StartedAt != "" {
+            next.StartedAt = current.StartedAt
+        }
+        if status == "completed" || status == "failed" {
+            next.FinishedAt = time.Now().Format(time.RFC3339)
+        }
+        if message != "" {
+            next.Message = message
+        } else if current.Message != "" {
+            next.Message = current.Message
+        }
     }
     writeBackupStatus(serverId, next)
 }
