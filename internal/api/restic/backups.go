@@ -25,6 +25,7 @@ func CreateServerResticBackup(c *gin.Context) {
 
     var ownerUsername, encryptionKey string
     var maxBackups int
+    var maxRepoBytes int64
     if v, ok := c.GetPostForm("owner_username"); ok && v != "" {
         ownerUsername = v
     } else {
@@ -32,11 +33,13 @@ func CreateServerResticBackup(c *gin.Context) {
             OwnerUsername string `json:"owner_username"`
             EncryptionKey string `json:"encryption_key"`
             MaxBackups    int    `json:"max_backups"`
+            MaxRepoBytes  int64  `json:"max_repo_bytes"`
         }
         if err := c.ShouldBindJSON(&body); err == nil {
             ownerUsername = body.OwnerUsername
             encryptionKey = body.EncryptionKey
             maxBackups = body.MaxBackups
+            maxRepoBytes = body.MaxRepoBytes
         }
     }
     if encryptionKey == "" {
@@ -61,6 +64,31 @@ func CreateServerResticBackup(c *gin.Context) {
         if out, err := initCmd.CombinedOutput(); err != nil {
             c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out)})
             return
+        }
+    }
+
+    if maxRepoBytes > 0 {
+        statsCmd := exec.Command("restic", "-r", repo, "stats", "--json")
+        statsCmd.Env = env
+        statsOut, statsErr := statsCmd.CombinedOutput()
+        if statsErr == nil {
+            var stats map[string]interface{}
+            if err := json.Unmarshal(statsOut, &stats); err == nil {
+                if v, ok := stats["total_size"]; ok {
+                    switch t := v.(type) {
+                    case float64:
+                        if int64(t) >= maxRepoBytes {
+                            c.JSON(http.StatusBadRequest, gin.H{"error": "repo size limit reached"})
+                            return
+                        }
+                    case json.Number:
+                        if n, err := t.Int64(); err == nil && n >= maxRepoBytes {
+                            c.JSON(http.StatusBadRequest, gin.H{"error": "repo size limit reached"})
+                            return
+                        }
+                    }
+                }
+            }
         }
     }
 
