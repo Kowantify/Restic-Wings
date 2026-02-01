@@ -1638,6 +1638,47 @@ func repoDiskUsageBytes(path string) (int64, error) {
     return total, err
 }
 
+// POST /api/servers/:server/backups/restic/repo/check
+func CheckServerResticRepoHealth(c *gin.Context) {
+    repo, env, err := resticRepoFromRequest(c)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    var body struct {
+        ReadDataSubset string `json:"read_data_subset"`
+    }
+    _ = c.ShouldBindJSON(&body)
+
+    args := []string{"-r", repo, "check"}
+    if strings.TrimSpace(body.ReadDataSubset) != "" {
+        args = append(args, "--read-data-subset", strings.TrimSpace(body.ReadDataSubset))
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+    defer cancel()
+    cmd := exec.CommandContext(ctx, "restic", args...)
+    cmd.Env = env
+    output, err := cmd.CombinedOutput()
+    if ctx.Err() == context.DeadlineExceeded {
+        c.JSON(http.StatusGatewayTimeout, gin.H{"error": "health check timed out"})
+        return
+    }
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "status": "failed",
+            "output": string(output),
+        })
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "status": "ok",
+        "output": string(output),
+    })
+}
+
 // GET /api/servers/:server/backups/restic/repo/size
 func GetServerResticRepoDiskUsage(c *gin.Context) {
     serverId := c.Param("server")
