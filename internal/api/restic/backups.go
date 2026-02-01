@@ -693,22 +693,11 @@ func GetServerResticStats(c *gin.Context) {
 
     response := gin.H{}
 
-    // Compressed on-disk size
-    if rawStats, rawErr := runStats("raw-data", 60*time.Second); rawErr == nil {
-        if v, ok := rawStats["total_size"]; ok {
-            if n, ok := extractNumber(v); ok {
-                response["total_size"] = n
-            }
-        }
-    }
-
     stats, err := runStats("", 30*time.Second)
     if err == nil {
-        if _, ok := response["total_size"]; !ok {
-            if v, ok := stats["total_size"]; ok {
-                if n, ok := extractNumber(v); ok {
-                    response["total_size"] = n
-                }
+        if v, ok := stats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_uncompressed_size"] = n
             }
         }
         if v, ok := stats["snapshots_count"]; ok {
@@ -718,9 +707,18 @@ func GetServerResticStats(c *gin.Context) {
         }
     }
 
+    // Compressed on-disk size
+    if rawStats, rawErr := runStats("raw-data", 60*time.Second); rawErr == nil {
+        if v, ok := rawStats["total_size"]; ok {
+            if n, ok := extractNumber(v); ok {
+                response["total_size"] = n
+            }
+        }
+    }
+
     includeUncompressed := c.Query("include_uncompressed") == "1"
     if includeUncompressed {
-        if restoreStats, restoreErr := runStats("restore-size", 120*time.Second); restoreErr == nil {
+        if restoreStats, restoreErr := runStats("restore-size", 300*time.Second); restoreErr == nil {
             if v, ok := restoreStats["total_size"]; ok {
                 if n, ok := extractNumber(v); ok {
                     response["total_uncompressed_size"] = n
@@ -734,6 +732,14 @@ func GetServerResticStats(c *gin.Context) {
                     response["total_uncompressed_size"] = n
                 }
             }
+        } else {
+            response["uncompressed_error"] = restoreErr.Error()
+        }
+    }
+
+    if _, ok := response["total_size"]; !ok {
+        if v, ok := response["total_uncompressed_size"]; ok {
+            response["total_size"] = v
         }
     }
 
