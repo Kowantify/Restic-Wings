@@ -1242,8 +1242,8 @@ func GetServerResticLocks(c *gin.Context) {
             continue
         }
 
-        var locks []map[string]interface{}
-        if jsonErr := json.Unmarshal(out, &locks); jsonErr == nil {
+        locks, parseErr := parseResticJSONLines(out)
+        if parseErr == nil {
             entry["locks"] = locks
             entry["locked"] = len(locks) > 0
         } else {
@@ -1253,6 +1253,26 @@ func GetServerResticLocks(c *gin.Context) {
     }
 
     c.JSON(http.StatusOK, gin.H{"repos": results})
+}
+
+func parseResticJSONLines(out []byte) ([]map[string]interface{}, error) {
+    lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+    if len(lines) == 0 || lines[0] == "" {
+        return []map[string]interface{}{}, nil
+    }
+    items := make([]map[string]interface{}, 0, len(lines))
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line == "" {
+            continue
+        }
+        var obj map[string]interface{}
+        if err := json.Unmarshal([]byte(line), &obj); err != nil {
+            return nil, err
+        }
+        items = append(items, obj)
+    }
+    return items, nil
 }
 
 // POST /api/servers/:server/backups/restic/unlock
