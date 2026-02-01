@@ -606,53 +606,6 @@ func ListServerResticBackups(c *gin.Context) {
                 }
             }
 
-            // Fallback: compute size by summing file sizes from restic ls --json
-            id, _ := snap["id"].(string)
-            shortID, _ := snap["short_id"].(string)
-            if shortID == "" && len(id) >= 8 {
-                shortID = id[:8]
-            }
-            snapshotID := id
-            if snapshotID == "" {
-                snapshotID = shortID
-            }
-            if snapshotID == "" {
-                continue
-            }
-
-            ctxLs, cancelLs := context.WithTimeout(context.Background(), 60*time.Second)
-            defer cancelLs()
-            lsCmd := exec.CommandContext(ctxLs, "restic", "-r", repo, "ls", "--json", "--recursive", snapshotID)
-            lsCmd.Env = env
-            lsOut, lsErr := lsCmd.CombinedOutput()
-            if lsErr != nil {
-                continue
-            }
-
-            var totalSize float64
-            lines := strings.Split(string(lsOut), "\n")
-            for _, line := range lines {
-                line = strings.TrimSpace(line)
-                if line == "" {
-                    continue
-                }
-                var obj map[string]interface{}
-                if err := json.Unmarshal([]byte(line), &obj); err != nil {
-                    continue
-                }
-                typ, _ := obj["type"].(string)
-                if typ != "file" {
-                    continue
-                }
-                if v, ok := obj["size"]; ok {
-                    if n, ok := extractNumber(v); ok {
-                        totalSize += n
-                    }
-                }
-            }
-            if totalSize > 0 {
-                snap["size"] = totalSize
-            }
         }
     }
 
