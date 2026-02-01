@@ -62,8 +62,12 @@ func CreateServerResticBackup(c *gin.Context) {
         initCmd := exec.Command("restic", "-r", repo, "init")
         initCmd.Env = env
         if out, err := initCmd.CombinedOutput(); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out)})
-            return
+            if _, statErr := os.Stat(repo + "/config"); statErr == nil || strings.Contains(string(out), "already initialized") || strings.Contains(string(out), "config already exists") {
+                // repo initialized concurrently; continue
+            } else {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "init failed", "output": string(out), "repo": repo})
+                return
+            }
         }
     }
 
@@ -705,7 +709,7 @@ func buildResticEnv(encryptionKey string) []string {
     base := os.Environ()
     filtered := make([]string, 0, len(base)+1)
     for _, v := range base {
-        if strings.HasPrefix(v, "RESTIC_PASSWORD=") || strings.HasPrefix(v, "RESTIC_PASSWORD_FILE=") {
+        if strings.HasPrefix(v, "RESTIC_PASSWORD") {
             continue
         }
         filtered = append(filtered, v)
