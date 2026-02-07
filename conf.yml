@@ -1,0 +1,37 @@
+info:
+  name: "resticbackups"
+  identifier: "resticbackups"
+  description: "restic backups"
+  flags: ""
+  version: "1.0"
+  target: "beta-2026-01"
+  author: "Kowantify"
+  icon: "icons/restic.png"
+  website: ""
+
+
+admin:
+  view: "admin/view.blade.php"
+  controller: "app/Http/Controllers/Admin/Extensions/resticbackups/resticbackupsExtensionController.php"
+  css: ""
+  wrapper: ""
+
+dashboard:
+  css: ""
+  wrapper: ""
+  components: "components"
+
+data:
+  directory: "fs/private"
+  public: ""
+  console: "console"
+
+requests:
+  views: ""
+  app: "app"
+  routers:
+    client: "clientroutes.php"
+    web: "web.php"
+
+database:
+  migrations: "database/migrations"
