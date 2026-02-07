@@ -4,10 +4,10 @@ import (
     "context"
     "encoding/json"
     "fmt"
+    "io/fs"
     "net/http"
     "os"
     "os/exec"
-    "io/fs"
     "path/filepath"
     "sort"
     "strconv"
@@ -15,6 +15,7 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
+    "github.com/gin-gonic/gin/binding"
 )
 
 // POST /api/servers/:server/backups/restic
@@ -823,7 +824,8 @@ func resticRepoFromRequest(c *gin.Context) (string, []string, error) {
             OwnerUsername string `json:"owner_username"`
             EncryptionKey string `json:"encryption_key"`
         }
-        if err := c.ShouldBindJSON(&body); err == nil {
+        // Use ShouldBindBodyWith so handlers can safely bind the body again later (Gin caches the bytes).
+        if err := c.ShouldBindBodyWith(&body, binding.JSON); err == nil {
             if ownerUsername == "" {
                 ownerUsername = body.OwnerUsername
             }
@@ -1070,6 +1072,16 @@ func setBackupStatus(serverId string, status string, message string) {
 
 func truncateStatusMessage(msg string) string {
     const max = 2000
+    trimmed := strings.TrimSpace(msg)
+    if len(trimmed) <= max {
+        return trimmed
+    }
+    return trimmed[:max]
+}
+
+func truncateCommandOutput(msg string) string {
+    // Keep outputs readable in the panel/admin UI but prevent huge blobs from being returned.
+    const max = 20000
     trimmed := strings.TrimSpace(msg)
     if len(trimmed) <= max {
         return trimmed
@@ -1425,62 +1437,261 @@ func PruneServerResticBackup(c *gin.Context) {
         return
     }
 
-    var body struct {
-        KeepLast   int    `json:"keep_last"`
-        KeepDaily  int    `json:"keep_daily"`
-        KeepWeekly int    `json:"keep_weekly"`
-        KeepMonthly int   `json:"keep_monthly"`
-        KeepYearly int    `json:"keep_yearly"`
-        KeepWithin string `json:"keep_within"`
-    }
-    _ = c.ShouldBindJSON(&body)
+    serverId := c.Param("server")
+    asyncParam := strings.ToLower(strings.TrimSpace(c.Query("async")))
+    async := asyncParam == "1" || asyncParam == "true" || asyncParam == "yes"
 
-    if body.KeepLast <= 0 && body.KeepDaily <= 0 && body.KeepWeekly <= 0 && body.KeepMonthly <= 0 && body.KeepYearly <= 0 && strings.TrimSpace(body.KeepWithin) == "" {
+    // Best-effort concurrency guard.
+    if serverId != "" {
+        if status, err := readPruneStatus(serverId); err == nil && status.Status == "running" {
+            if status.StartedAt != "" {
+                if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+                    if time.Since(started) <= 6*time.Hour {
+                        c.JSON(http.StatusConflict, gin.H{"error": "prune already running"})
+                        return
+                    }
+                    status.Status = "failed"
+                    status.FinishedAt = time.Now().Format(time.RFC3339)
+                    if status.Message == "" {
+                        status.Message = "Prune appears stale. Please retry."
+                    }
+                    writePruneStatus(serverId, status)
+                }
+            } else {
+                c.JSON(http.StatusConflict, gin.H{"error": "prune already running"})
+                return
+            }
+        }
+    }
+
+    var body struct {
+        // Use pointers so JSON null does not cause binding to fail (the panel sends null for unset fields).
+        KeepLast    *int    `json:"keep_last"`
+        KeepDaily   *int    `json:"keep_daily"`
+        KeepWeekly  *int    `json:"keep_weekly"`
+        KeepMonthly *int    `json:"keep_monthly"`
+        KeepYearly  *int    `json:"keep_yearly"`
+        KeepWithin  *string `json:"keep_within"`
+    }
+    _ = c.ShouldBindBodyWith(&body, binding.JSON)
+
+    keepWithin := ""
+    if body.KeepWithin != nil {
+        keepWithin = strings.TrimSpace(*body.KeepWithin)
+    }
+
+    keepLast := 0
+    if body.KeepLast != nil {
+        keepLast = *body.KeepLast
+    }
+    keepDaily := 0
+    if body.KeepDaily != nil {
+        keepDaily = *body.KeepDaily
+    }
+    keepWeekly := 0
+    if body.KeepWeekly != nil {
+        keepWeekly = *body.KeepWeekly
+    }
+    keepMonthly := 0
+    if body.KeepMonthly != nil {
+        keepMonthly = *body.KeepMonthly
+    }
+    keepYearly := 0
+    if body.KeepYearly != nil {
+        keepYearly = *body.KeepYearly
+    }
+
+    if keepLast <= 0 && keepDaily <= 0 && keepWeekly <= 0 && keepMonthly <= 0 && keepYearly <= 0 && keepWithin == "" {
         c.JSON(http.StatusBadRequest, gin.H{"error": "at least one retention rule is required"})
         return
     }
 
     args := []string{"-r", repo, "forget", "--prune", "--keep-tag", "locked"}
-    if body.KeepLast > 0 {
-        args = append(args, "--keep-last", strconv.Itoa(body.KeepLast))
+    if keepLast > 0 {
+        args = append(args, "--keep-last", strconv.Itoa(keepLast))
     }
-    if body.KeepDaily > 0 {
-        args = append(args, "--keep-daily", strconv.Itoa(body.KeepDaily))
+    if keepDaily > 0 {
+        args = append(args, "--keep-daily", strconv.Itoa(keepDaily))
     }
-    if body.KeepWeekly > 0 {
-        args = append(args, "--keep-weekly", strconv.Itoa(body.KeepWeekly))
+    if keepWeekly > 0 {
+        args = append(args, "--keep-weekly", strconv.Itoa(keepWeekly))
     }
-    if body.KeepMonthly > 0 {
-        args = append(args, "--keep-monthly", strconv.Itoa(body.KeepMonthly))
+    if keepMonthly > 0 {
+        args = append(args, "--keep-monthly", strconv.Itoa(keepMonthly))
     }
-    if body.KeepYearly > 0 {
-        args = append(args, "--keep-yearly", strconv.Itoa(body.KeepYearly))
+    if keepYearly > 0 {
+        args = append(args, "--keep-yearly", strconv.Itoa(keepYearly))
     }
-    if strings.TrimSpace(body.KeepWithin) != "" {
-        args = append(args, "--keep-within", body.KeepWithin)
+    if keepWithin != "" {
+        args = append(args, "--keep-within", keepWithin)
     }
 
-    cmd := exec.Command("restic", args...)
-    cmd.Env = env
-    out, err := cmd.CombinedOutput()
-    if err != nil {
-        if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
-            retry := exec.Command("restic", args...)
-            retry.Env = env
-            if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
-                c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": string(retryOut)})
+    run := func() (string, error) {
+        cmdCtx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+        defer cancel()
+        cmd := exec.CommandContext(cmdCtx, "restic", args...)
+        cmd.Env = env
+        out, err := cmd.CombinedOutput()
+        if cmdCtx.Err() == context.DeadlineExceeded {
+            return string(out), fmt.Errorf("prune timed out")
+        }
+        if err != nil {
+            if isRepoLockedError(string(out)) && tryUnlockStaleLock(repo, env, string(out)) {
+                retry := exec.Command("restic", args...)
+                retry.Env = env
+                if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+                    return string(retryOut), nil
+                }
+            }
+            return string(out), err
+        }
+        return string(out), nil
+    }
+
+    if async && serverId != "" {
+        setPruneStatus(serverId, "running", "", "")
+        go func() {
+            out, err := run()
+            if err != nil {
+                msg := err.Error()
+                if isRepoLockedError(out) {
+                    msg = "Repository is busy. Please try again later."
+                }
+                setPruneStatus(serverId, "failed", truncateStatusMessage(msg), truncateCommandOutput(out))
                 return
             }
-        }
-        if isRepoLockedError(string(out)) {
+            setPruneStatus(serverId, "completed", "", truncateCommandOutput(out))
+        }()
+        c.JSON(http.StatusAccepted, gin.H{"message": "prune started"})
+        return
+    }
+
+    out, err := run()
+    if err != nil {
+        if isRepoLockedError(out) {
+            if serverId != "" {
+                setPruneStatus(serverId, "failed", "Repository is busy. Please try again later.", truncateCommandOutput(out))
+            }
             c.JSON(http.StatusConflict, gin.H{"error": "repo busy"})
             return
+        }
+        if serverId != "" {
+            setPruneStatus(serverId, "failed", truncateStatusMessage(err.Error()), truncateCommandOutput(out))
         }
         c.JSON(http.StatusInternalServerError, gin.H{"error": "prune failed"})
         return
     }
+    if serverId != "" {
+        setPruneStatus(serverId, "completed", "", truncateCommandOutput(out))
+    }
+    c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": truncateCommandOutput(out)})
+}
 
-    c.JSON(http.StatusOK, gin.H{"message": "prune completed", "output": string(out)})
+type resticPruneStatus struct {
+    Status     string `json:"status"`
+    StartedAt  string `json:"started_at,omitempty"`
+    FinishedAt string `json:"finished_at,omitempty"`
+    Message    string `json:"message,omitempty"`
+    Output     string `json:"output,omitempty"`
+}
+
+func pruneStatusDir() string {
+    return "/var/lib/pterodactyl/restic/.prune-status"
+}
+
+func pruneStatusPath(serverId string) string {
+    return filepath.Join(pruneStatusDir(), serverId+".json")
+}
+
+func readPruneStatus(serverId string) (resticPruneStatus, error) {
+    var status resticPruneStatus
+    data, err := os.ReadFile(pruneStatusPath(serverId))
+    if err != nil {
+        return status, err
+    }
+    if err := json.Unmarshal(data, &status); err != nil {
+        return resticPruneStatus{}, err
+    }
+    return status, nil
+}
+
+func writePruneStatus(serverId string, status resticPruneStatus) {
+    if serverId == "" {
+        return
+    }
+    _ = os.MkdirAll(pruneStatusDir(), 0755)
+    data, err := json.Marshal(status)
+    if err != nil {
+        return
+    }
+    tmp := pruneStatusPath(serverId) + ".tmp"
+    if err := os.WriteFile(tmp, data, 0644); err == nil {
+        _ = os.Rename(tmp, pruneStatusPath(serverId))
+    }
+    cleanupStatusDir(pruneStatusDir(), 7*24*time.Hour)
+}
+
+func setPruneStatus(serverId string, status string, message string, output string) {
+    if serverId == "" {
+        return
+    }
+    current, _ := readPruneStatus(serverId)
+    next := resticPruneStatus{Status: status}
+
+    if status == "running" {
+        next.StartedAt = time.Now().Format(time.RFC3339)
+        next.FinishedAt = ""
+        next.Message = ""
+        next.Output = ""
+    } else {
+        if current.StartedAt != "" {
+            next.StartedAt = current.StartedAt
+        }
+        if status == "completed" || status == "failed" {
+            next.FinishedAt = time.Now().Format(time.RFC3339)
+        }
+        if message != "" {
+            next.Message = truncateStatusMessage(message)
+        } else if current.Message != "" {
+            next.Message = current.Message
+        }
+        if output != "" {
+            next.Output = truncateCommandOutput(output)
+        } else if current.Output != "" {
+            next.Output = current.Output
+        }
+    }
+    writePruneStatus(serverId, next)
+}
+
+// GET /api/servers/:server/backups/restic/prune/status
+func GetServerResticPruneStatus(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    status, err := readPruneStatus(serverId)
+    if err != nil || status.Status == "" {
+        c.JSON(http.StatusOK, gin.H{"status": "idle"})
+        return
+    }
+
+    if status.Status == "running" && status.StartedAt != "" {
+        if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+            if time.Since(started) > 6*time.Hour {
+                status.Status = "failed"
+                status.FinishedAt = time.Now().Format(time.RFC3339)
+                if status.Message == "" {
+                    status.Message = "Prune appears stale. Please retry."
+                }
+                writePruneStatus(serverId, status)
+            }
+        }
+    }
+
+    c.JSON(http.StatusOK, status)
 }
 
 // GET /api/servers/:server/backups/restic/locks
@@ -1846,37 +2057,200 @@ func CheckServerResticRepoHealth(c *gin.Context) {
         return
     }
 
+    serverId := c.Param("server")
+    asyncParam := strings.ToLower(strings.TrimSpace(c.Query("async")))
+    async := asyncParam == "1" || asyncParam == "true" || asyncParam == "yes"
+
+    // Best-effort concurrency guard.
+    if async && serverId != "" {
+        if status, err := readRepoHealthStatus(serverId); err == nil && status.Status == "running" {
+            if status.StartedAt != "" {
+                if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+                    if time.Since(started) <= 6*time.Hour {
+                        c.JSON(http.StatusConflict, gin.H{"error": "health check already running"})
+                        return
+                    }
+                    status.Status = "failed"
+                    status.FinishedAt = time.Now().Format(time.RFC3339)
+                    if status.Message == "" {
+                        status.Message = "Health check appears stale. Please retry."
+                    }
+                    writeRepoHealthStatus(serverId, status)
+                }
+            } else {
+                c.JSON(http.StatusConflict, gin.H{"error": "health check already running"})
+                return
+            }
+        }
+    }
+
     var body struct {
         ReadDataSubset string `json:"read_data_subset"`
     }
-    _ = c.ShouldBindJSON(&body)
+    _ = c.ShouldBindBodyWith(&body, binding.JSON)
 
     args := []string{"-r", repo, "check"}
     if strings.TrimSpace(body.ReadDataSubset) != "" {
         args = append(args, "--read-data-subset", strings.TrimSpace(body.ReadDataSubset))
     }
 
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-    defer cancel()
-    cmd := exec.CommandContext(ctx, "restic", args...)
-    cmd.Env = env
-    output, err := cmd.CombinedOutput()
-    if ctx.Err() == context.DeadlineExceeded {
-        c.JSON(http.StatusGatewayTimeout, gin.H{"error": "health check timed out"})
+    run := func(timeout time.Duration) (string, error) {
+        ctx, cancel := context.WithTimeout(context.Background(), timeout)
+        defer cancel()
+        cmd := exec.CommandContext(ctx, "restic", args...)
+        cmd.Env = env
+        output, err := cmd.CombinedOutput()
+        if ctx.Err() == context.DeadlineExceeded {
+            return string(output), fmt.Errorf("health check timed out")
+        }
+        if err != nil {
+            return string(output), err
+        }
+        return string(output), nil
+    }
+
+    if async && serverId != "" {
+        setRepoHealthStatus(serverId, "running", "", "")
+        go func() {
+            out, err := run(2 * time.Hour)
+            if err != nil {
+                msg := err.Error()
+                if isRepoLockedError(out) {
+                    msg = "Repository is busy. Please try again later."
+                }
+                setRepoHealthStatus(serverId, "failed", truncateStatusMessage(msg), truncateCommandOutput(out))
+                return
+            }
+            setRepoHealthStatus(serverId, "completed", "", truncateCommandOutput(out))
+        }()
+        c.JSON(http.StatusAccepted, gin.H{"message": "health check started"})
         return
     }
+
+    out, err := run(10 * time.Minute)
     if err != nil {
+        if strings.Contains(strings.ToLower(err.Error()), "timed out") {
+            c.JSON(http.StatusGatewayTimeout, gin.H{"error": "health check timed out"})
+            return
+        }
         c.JSON(http.StatusInternalServerError, gin.H{
             "status": "failed",
-            "output": string(output),
+            "output": truncateCommandOutput(out),
         })
         return
     }
 
     c.JSON(http.StatusOK, gin.H{
         "status": "ok",
-        "output": string(output),
+        "output": truncateCommandOutput(out),
     })
+}
+
+type resticRepoHealthStatus struct {
+    Status     string `json:"status"`
+    StartedAt  string `json:"started_at,omitempty"`
+    FinishedAt string `json:"finished_at,omitempty"`
+    Message    string `json:"message,omitempty"`
+    Output     string `json:"output,omitempty"`
+}
+
+func repoHealthStatusDir() string {
+    return "/var/lib/pterodactyl/restic/.repo-health-status"
+}
+
+func repoHealthStatusPath(serverId string) string {
+    return filepath.Join(repoHealthStatusDir(), serverId+".json")
+}
+
+func readRepoHealthStatus(serverId string) (resticRepoHealthStatus, error) {
+    var status resticRepoHealthStatus
+    data, err := os.ReadFile(repoHealthStatusPath(serverId))
+    if err != nil {
+        return status, err
+    }
+    if err := json.Unmarshal(data, &status); err != nil {
+        return resticRepoHealthStatus{}, err
+    }
+    return status, nil
+}
+
+func writeRepoHealthStatus(serverId string, status resticRepoHealthStatus) {
+    if serverId == "" {
+        return
+    }
+    _ = os.MkdirAll(repoHealthStatusDir(), 0755)
+    data, err := json.Marshal(status)
+    if err != nil {
+        return
+    }
+    tmp := repoHealthStatusPath(serverId) + ".tmp"
+    if err := os.WriteFile(tmp, data, 0644); err == nil {
+        _ = os.Rename(tmp, repoHealthStatusPath(serverId))
+    }
+    cleanupStatusDir(repoHealthStatusDir(), 7*24*time.Hour)
+}
+
+func setRepoHealthStatus(serverId string, status string, message string, output string) {
+    if serverId == "" {
+        return
+    }
+    current, _ := readRepoHealthStatus(serverId)
+    next := resticRepoHealthStatus{Status: status}
+
+    if status == "running" {
+        next.StartedAt = time.Now().Format(time.RFC3339)
+        next.FinishedAt = ""
+        next.Message = ""
+        next.Output = ""
+    } else {
+        if current.StartedAt != "" {
+            next.StartedAt = current.StartedAt
+        }
+        if status == "completed" || status == "failed" {
+            next.FinishedAt = time.Now().Format(time.RFC3339)
+        }
+        if message != "" {
+            next.Message = truncateStatusMessage(message)
+        } else if current.Message != "" {
+            next.Message = current.Message
+        }
+        if output != "" {
+            next.Output = truncateCommandOutput(output)
+        } else if current.Output != "" {
+            next.Output = current.Output
+        }
+    }
+    writeRepoHealthStatus(serverId, next)
+}
+
+// GET /api/servers/:server/backups/restic/repo/check/status
+func GetServerResticRepoHealthStatus(c *gin.Context) {
+    serverId := c.Param("server")
+    if serverId == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "missing server id"})
+        return
+    }
+
+    status, err := readRepoHealthStatus(serverId)
+    if err != nil || status.Status == "" {
+        c.JSON(http.StatusOK, gin.H{"status": "idle"})
+        return
+    }
+
+    if status.Status == "running" && status.StartedAt != "" {
+        if started, err := time.Parse(time.RFC3339, status.StartedAt); err == nil {
+            if time.Since(started) > 6*time.Hour {
+                status.Status = "failed"
+                status.FinishedAt = time.Now().Format(time.RFC3339)
+                if status.Message == "" {
+                    status.Message = "Health check appears stale. Please retry."
+                }
+                writeRepoHealthStatus(serverId, status)
+            }
+        }
+    }
+
+    c.JSON(http.StatusOK, status)
 }
 
 // GET /api/servers/:server/backups/restic/repo/size
