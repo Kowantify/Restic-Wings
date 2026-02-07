@@ -16,6 +16,7 @@ WINGS_BIN="/usr/local/bin/wings"
 # This should point to the same GitHub repo that hosts this script.
 # If you fork this repo, change REPO_URL to your fork.
 REPO_URL="https://github.com/Kowantify/Restic-Wings.git"
+REPO_BRANCH="develop"
 
 RESTIC_BIN="/usr/local/bin/restic"
 
@@ -116,7 +117,7 @@ fi
 
 echo "[1] Cloning Restic-Wings repository..."
 rm -rf "$TMP_DIR"
-git clone --depth=1 "$REPO_URL" "$TMP_DIR"
+git clone --depth=1 --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_DIR"
 cd "$TMP_DIR"
 
 echo "[2] Building wings binary..."
@@ -145,4 +146,3 @@ rm -rf "$TMP_DIR"
 
 sleep 2
 echo -e "\nAll done! Restic-Wings is installed and Wings has been restarted."
-
