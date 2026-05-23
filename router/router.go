@@ -1,23 +1,13 @@
 package router
 
 import (
-"emperror.dev/errors"
-"github.com/apex/log"
-"github.com/gin-gonic/gin"
-
-"github.com/pterodactyl/wings/config"
-"github.com/pterodactyl/wings/remote"
-"github.com/pterodactyl/wings/router/middleware"
-wserver "github.com/pterodactyl/wings/server"
-
-restic "github.com/pterodactyl/wings/internal/api/restic"
 	"regexp"
 
 	"emperror.dev/errors"
 	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
-
 	"github.com/pterodactyl/wings/config"
+	restic "github.com/pterodactyl/wings/internal/api/restic"
 	"github.com/pterodactyl/wings/remote"
 	"github.com/pterodactyl/wings/router/middleware"
 	wserver "github.com/pterodactyl/wings/server"
