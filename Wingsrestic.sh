@@ -72,9 +72,9 @@ fi
 if ! command -v restic >/dev/null 2>&1; then
   echo "Installing restic from GitHub releases..."
   if command -v curl >/dev/null 2>&1; then
-    RESTIC_TAG=$(curl -fsSL "https://api.github.com/repos/restic/restic/releases/latest" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\\1/')
+    RESTIC_TAG=$(curl -fsSL "https://api.github.com/repos/restic/restic/releases/latest" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
   elif command -v wget >/dev/null 2>&1; then
-    RESTIC_TAG=$(wget -qO- "https://api.github.com/repos/restic/restic/releases/latest" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\\1/')
+    RESTIC_TAG=$(wget -qO- "https://api.github.com/repos/restic/restic/releases/latest" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
   else
     echo "curl or wget is required to download restic." >&2
     exit 1
