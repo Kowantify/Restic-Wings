@@ -5,6 +5,7 @@ import (
     "io"
     "net/http"
     "os"
+    "strings"
 
     "github.com/gin-gonic/gin"
     "github.com/pterodactyl/wings/server"
@@ -22,9 +23,14 @@ func DownloadServerResticBackup(c *gin.Context) {
     }
 
     s := c.MustGet("server").(*server.Server)
-    if err := prepareServerResticBackupInternal(s.ID(), backupId, encryptionKey, ownerUsername); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
-        return
+    skipPrepare := strings.EqualFold(c.Query("skip_prepare"), "1") ||
+        strings.EqualFold(c.Query("skip_prepare"), "true") ||
+        strings.EqualFold(c.Query("skip_prepare"), "yes")
+    if !skipPrepare {
+        if err := prepareServerResticBackupInternal(s.ID(), backupId, encryptionKey, ownerUsername); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "prepare failed"})
+            return
+        }
     }
     StreamPreparedResticBackup(c, s, backupId)
 }
